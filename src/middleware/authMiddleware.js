@@ -1,6 +1,5 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
-const { buildShopScope } = require('./shopScopeMiddleware');
 
 const protect = async (req, res, next) => {
   let token;
@@ -25,8 +24,6 @@ const protect = async (req, res, next) => {
     if (!req.user || !req.user.is_active) {
       return res.status(401).json({ success: false, message: 'User not found or deactivated' });
     }
-
-    req.shopScope = buildShopScope(req.user);
 
     next();
   } catch (err) {

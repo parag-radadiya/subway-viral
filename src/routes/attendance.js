@@ -44,7 +44,7 @@ const { validateGeofence } = require('../middleware/geoMiddleware');
  *                 location_token:
  *                   type: string
  *       403:
- *         description: Outside geofence radius or shop not assigned to this user
+ *         description: Outside geofence radius
  *         content:
  *           application/json:
  *             schema:
@@ -90,7 +90,7 @@ router.post('/verify-location', protect, validateGeofence, verifyLocation);
  *                 success: { type: boolean }
  *                 data: { $ref: '#/components/schemas/Attendance' }
  *       403:
- *         description: Biometric failed / token invalid / device mismatch / cross-shop attempt
+ *         description: Biometric failed / token invalid / device mismatch
  *         content:
  *           application/json:
  *             schema:

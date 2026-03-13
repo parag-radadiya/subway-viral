@@ -100,10 +100,6 @@ const options = {
             device_id: { type: 'string' },
             role_id: { $ref: '#/components/schemas/Role' },
             shop_id: { $ref: '#/components/schemas/Shop' },
-            assigned_shop_ids: {
-              type: 'array',
-              items: { $ref: '#/components/schemas/Shop' },
-            },
             is_active: { type: 'boolean' },
             must_change_password: { type: 'boolean' },
           },
@@ -120,10 +116,6 @@ const options = {
             role_id: { type: 'string' },
             device_id: { type: 'string' },
             shop_id: { type: 'string' },
-            assigned_shop_ids: {
-              type: 'array',
-              items: { type: 'string' },
-            },
           },
         },
         PasswordUpdateRequest: {
@@ -132,50 +124,6 @@ const options = {
           properties: {
             currentPassword: { type: 'string' },
             newPassword: { type: 'string', minLength: 8 },
-          },
-        },
-        AssignedShopStaffSummaryResponse: {
-          type: 'object',
-          properties: {
-            success: { type: 'boolean' },
-            scope: {
-              type: 'object',
-              properties: {
-                all: { type: 'boolean' },
-                shop_ids: { type: 'array', items: { type: 'string' } },
-              },
-            },
-            totals: {
-              type: 'object',
-              properties: {
-                shops: { type: 'integer' },
-                users: { type: 'integer' },
-              },
-            },
-            by_shop: {
-              type: 'array',
-              items: {
-                type: 'object',
-                properties: {
-                  shop: { $ref: '#/components/schemas/Shop' },
-                  user_count: { type: 'integer' },
-                  users: {
-                    type: 'array',
-                    items: {
-                      type: 'object',
-                      properties: {
-                        id: { type: 'string' },
-                        name: { type: 'string' },
-                        email: { type: 'string' },
-                        role_name: { type: 'string' },
-                        shop_id: { type: 'string' },
-                        assigned_shop_ids: { type: 'array', items: { type: 'string' } },
-                      },
-                    },
-                  },
-                },
-              },
-            },
           },
         },
 

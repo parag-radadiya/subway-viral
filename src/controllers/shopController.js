@@ -1,18 +1,9 @@
 const Shop = require('../models/Shop');
-const { isShopAllowed } = require('../middleware/shopScopeMiddleware');
 
 // GET /api/shops
 const getShops = async (req, res) => {
   try {
-    let shops;
-    if (req.shopScope?.all) {
-      shops = await Shop.find();
-    } else if (req.shopScope?.ids?.length) {
-      shops = await Shop.find({ _id: { $in: req.shopScope.ids } });
-    } else {
-      shops = [];
-    }
-
+    const shops = await Shop.find();
     res.json({ success: true, data: shops });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -22,13 +13,6 @@ const getShops = async (req, res) => {
 // GET /api/shops/:id
 const getShop = async (req, res) => {
   try {
-    if (!isShopAllowed(req.shopScope, req.params.id)) {
-      return res.status(403).json({
-        success: false,
-        message: 'Forbidden: you can only access your assigned shops',
-      });
-    }
-
     const shop = await Shop.findById(req.params.id);
     if (!shop) return res.status(404).json({ success: false, message: 'Shop not found' });
     res.json({ success: true, data: shop });

@@ -35,17 +35,6 @@ function weekBounds(weekStart) {
 
 const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
-// Read access: staff can read their own rota, privileged roles can read all.
-const canReadAllRotas = (req) => {
-  const permissions = req.user?.role_id?.permissions || {};
-  return Boolean(permissions.can_view_all_staff || permissions.can_manage_rotas);
-};
-
-const canReadShop = (req, shopId) => {
-  if (req.shopScope?.all) return true;
-  return Boolean(shopId && req.shopScope?.ids?.includes(shopId.toString()));
-};
-
 // ─── Existing single-record endpoints (unchanged) ────────────────────────────
 
 // GET /api/rotas
@@ -55,15 +44,6 @@ const getRotas = async (req, res) => {
     if (req.query.shop_id) filter.shop_id = req.query.shop_id;
     if (req.query.user_id) filter.user_id = req.query.user_id;
     if (req.query.date) filter.shift_date = new Date(req.query.date);
-
-    if (!canReadAllRotas(req)) {
-      filter.user_id = req.user._id;
-    } else if (!req.shopScope?.all) {
-      if (req.query.shop_id && !canReadShop(req, req.query.shop_id)) {
-        return res.status(403).json({ success: false, message: 'Forbidden: shop is outside your assigned scope' });
-      }
-      filter.shop_id = req.query.shop_id || { $in: req.shopScope?.ids || [] };
-    }
 
     const rotas = await Rota.find(filter)
       .populate('user_id', 'name email')
@@ -82,14 +62,6 @@ const getRota = async (req, res) => {
       .populate('user_id', 'name email')
       .populate('shop_id', 'name');
     if (!rota) return res.status(404).json({ success: false, message: 'Rota not found' });
-
-    if (!canReadAllRotas(req) && rota.user_id?._id?.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ success: false, message: 'Forbidden: you can only access your own rota records' });
-    }
-    if (canReadAllRotas(req) && !canReadShop(req, rota.shop_id?._id || rota.shop_id)) {
-      return res.status(403).json({ success: false, message: 'Forbidden: rota is outside your assigned shops' });
-    }
-
     res.json({ success: true, data: rota });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -261,14 +233,6 @@ const getWeekView = async (req, res) => {
     const { start, end } = weekBounds(week_start);
     const filter = { shift_date: { $gte: start, $lte: end } };
     if (shop_id) filter.shop_id = shop_id;
-    if (!canReadAllRotas(req)) {
-      filter.user_id = req.user._id;
-    } else if (!req.shopScope?.all) {
-      if (shop_id && !canReadShop(req, shop_id)) {
-        return res.status(403).json({ success: false, message: 'Forbidden: shop is outside your assigned scope' });
-      }
-      filter.shop_id = shop_id || { $in: req.shopScope?.ids || [] };
-    }
 
     const rotas = await Rota.find(filter)
       .populate('user_id', 'name email phone_num')
@@ -350,13 +314,6 @@ const getDashboard = async (req, res) => {
     const filter = { shift_date: { $gte: start, $lte: end } };
     if (shop_id) filter.shop_id = shop_id;
     if (user_id) filter.user_id = user_id;
-
-    if (!req.shopScope?.all) {
-      if (shop_id && !canReadShop(req, shop_id)) {
-        return res.status(403).json({ success: false, message: 'Forbidden: shop is outside your assigned scope' });
-      }
-      filter.shop_id = shop_id || { $in: req.shopScope?.ids || [] };
-    }
 
     const rotas = await Rota.find(filter)
       .populate('user_id', 'name email')

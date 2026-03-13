@@ -1,10 +1,5 @@
 const InventoryQuery = require('../models/InventoryQuery');
 const InventoryItem = require('../models/InventoryItem');
-const { isShopAllowed } = require('../middleware/shopScopeMiddleware');
-
-const canReadShop = (req, shopId) => {
-  return isShopAllowed(req.shopScope, shopId);
-};
 
 // GET /api/inventory/queries
 const getQueries = async (req, res) => {
@@ -13,13 +8,6 @@ const getQueries = async (req, res) => {
     if (req.query.shop_id) filter.shop_id = req.query.shop_id;
     if (req.query.status) filter.status = req.query.status;
     if (req.query.item_id) filter.item_id = req.query.item_id;
-
-    if (!req.shopScope?.all) {
-      if (req.query.shop_id && !canReadShop(req, req.query.shop_id)) {
-        return res.status(403).json({ success: false, message: 'Forbidden: shop is outside your assigned scope' });
-      }
-      filter.shop_id = req.query.shop_id || { $in: req.shopScope?.ids || [] };
-    }
 
     const queries = await InventoryQuery.find(filter)
       .populate('item_id', 'item_name status')
@@ -44,9 +32,6 @@ const getQuery = async (req, res) => {
       .populate('resolved_by', 'name email');
 
     if (!query) return res.status(404).json({ success: false, message: 'Query not found' });
-    if (!canReadShop(req, query.shop_id?._id || query.shop_id)) {
-      return res.status(403).json({ success: false, message: 'Forbidden: query is outside your assigned shops' });
-    }
     res.json({ success: true, data: query });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -62,23 +47,11 @@ const createQuery = async (req, res) => {
     // Verify item exists
     const item = await InventoryItem.findById(item_id);
     if (!item) return res.status(404).json({ success: false, message: 'Inventory item not found' });
-    if (!canReadShop(req, item.shop_id)) {
-      return res.status(403).json({ success: false, message: 'Forbidden: item is outside your assigned shops' });
-    }
-
-    if (shop_id && item.shop_id.toString() !== shop_id.toString()) {
-      return res.status(400).json({ success: false, message: 'shop_id must match the selected item shop' });
-    }
-
-    const resolvedShopId = shop_id || item.shop_id;
-    if (!canReadShop(req, resolvedShopId)) {
-      return res.status(403).json({ success: false, message: 'Forbidden: shop is outside your assigned scope' });
-    }
 
     // Create the query (ticket)
     const query = await InventoryQuery.create({
       item_id,
-      shop_id: resolvedShopId,
+      shop_id: shop_id || item.shop_id,
       reported_by: req.user._id,
       issue_note,
       status: 'Open',
@@ -112,9 +85,6 @@ const closeQuery = async (req, res) => {
 
     const query = await InventoryQuery.findById(req.params.id);
     if (!query) return res.status(404).json({ success: false, message: 'Query not found' });
-    if (!canReadShop(req, query.shop_id)) {
-      return res.status(403).json({ success: false, message: 'Forbidden: query is outside your assigned shops' });
-    }
 
     if (query.status === 'Closed') {
       return res.status(400).json({ success: false, message: 'Query is already closed' });

@@ -1,150 +1,78 @@
-# Frontend Developer Guide (Ticket-Wise)
+# Frontend Developer Guide
 
-This guide is an execution plan for frontend integration with a **single login** and role-based dashboards.
+This guide outlines the core user flows and integration logic for building a frontend on top of the Staff & Inventory Management API.
 
-## Ticket 1 - Authentication Shell and Session
+---
 
-### Goal
-Implement one login flow for all users, then route by permissions.
+##  Authentication & Onboarding
 
-### Integration Steps
-1. Call `POST /api/auth/login`.
-2. If `must_change_password` is true, force password screen.
-3. Call `PUT /api/users/me/password`.
-4. Fetch profile with `GET /api/users/me`.
-5. Build app menu and dashboard from `data.role_id.permissions`.
+### Flow: Initial Login
+1. **Login**: `POST /api/auth/login`.
+2. **Response Check**: If `must_change_password: true`, immediately redirect the user to a "Change Password" screen.
+3. **Password Update**: `PUT /api/users/me/password` (Requires providing `currentPassword`).
+4. **Completion**: Once updated, the user can proceed to the dashboard.
 
-### APIs
-- `POST /api/auth/login`
-- `PUT /api/users/me/password`
-- `GET /api/users/me`
+### Storing Tokens
+- Store the JWT token securely (e.g., Secure Cookie or Encrypted Storage).
+- Include `Authorization: Bearer <token>` in all subsequent requests.
 
-### Acceptance
-- User cannot enter dashboard until mandatory password change is complete.
-- Wrong credentials and rate-limit (`429`) are handled cleanly.
+---
 
-## Ticket 2 - Employee Dashboard (Staff)
+## ⏰ Attendance: The Punch-In Flow
 
-### Goal
-Show only self data for employee users.
+The punch-in process is a 3-step security handshake:
 
-### Integration Steps
-1. Show profile using `GET /api/users/me`.
-2. Load own rota list via `GET /api/rotas`.
-3. Load own week rota via `GET /api/rotas/week?week_start=YYYY-MM-DD`.
-4. Build punch workflow:
-   - `POST /api/attendance/verify-location`
-   - Biometric prompt
-   - `POST /api/attendance/punch-in`
-   - `PUT /api/attendance/{id}/punch-out`
+### 1. GPS Verification (GPS Validation)
+- Get the user's current Coordinates.
+- Call `POST /api/attendance/verify-location` with `shop_id`, `latitude`, and `longitude`.
+- **Success**: You receive a `location_token` (valid for 5 minutes).
+- **Failure**: Inform the user they are outside the shop's geofence boundaries.
 
-### APIs
-- `GET /api/users/me`
-- `GET /api/rotas`
-- `GET /api/rotas/week`
-- `POST /api/attendance/verify-location`
-- `POST /api/attendance/punch-in`
-- `PUT /api/attendance/{id}/punch-out`
+### 2. Biometric Confirmation
+- Trigger the native Biometric (FaceID/Fingerprint) prompt on the device.
+- Ensure the user successfully authenticates locally.
 
-### Acceptance
-- Employee sees only own rota data.
-- Cross-shop punch-in is rejected with `403`.
+### 3. Finalize Punch-In
+- Call `POST /api/attendance/punch-in`.
+- **Headers**: Include `x-device-id` (a unique persistent ID for that device).
+- **Body**:
+  ```json
+  {
+    "shop_id": "<ID>",
+    "location_token": "<TOKEN_FROM_STEP_1>",
+    "biometric_verified": true
+  }
+  ```
+- The backend verifies the `location_token` and matches the `x-device-id` against the user's registered ID.
 
-## Ticket 3 - Sub-Manager Operations
+---
 
-### Goal
-Enable inventory and manual operations UI for sub-managers.
+##  Rota & Dashboarding
 
-### Integration Steps
-1. Show inventory list and details (`/api/inventory/items`).
-2. Show query list/detail and close flow (`/api/inventory/queries`).
-3. Enable manual punch for staff where allowed.
-4. Load assigned-shop staff summary for dashboard cards/tables.
+### Bulk Weekly Rota (Manager Only)
+- Managers can use a drag-and-drop or checklist UI to pick days and employees.
+- Call `POST /api/rotas/bulk`.
+- Use the `replace_existing: true` flag if the manager wants to overwrite the entire week for those users (e.g., when correcting a mistake).
+- **Conflict Handling**: The API returns a `conflicts[]` array. Show these to the manager so they know which shifts were skipped.
 
-### APIs
-- `GET/POST/PUT/DELETE /api/inventory/items`
-- `GET/POST /api/inventory/queries`
-- `GET /api/inventory/queries/{id}`
-- `PUT /api/inventory/queries/{id}/close`
-- `POST /api/attendance/manual-punch-in`
-- `GET /api/users/assigned-shops/staff-summary`
+### Dashboard Views
+- Use `GET /api/rotas/dashboard?week_start=YYYY-MM-DD` to get a full weekly summary.
+- The response provides `by_shop` (for store-view calendars) and `by_employee` (for staff-view calendars) in a single request.
 
-### Backend Gap for Requested Requirement
-- Requested: sub-manager assigned to one or more shops and can view assigned-shop employees + rota.
-- Current: assigned-shop employee summary endpoint is now available via `GET /api/users/assigned-shops/staff-summary`.
+---
 
-## Ticket 4 - Manager Dashboard
+##  Inventory Issue Tracking
 
-### Goal
-Support rota publishing and employee lifecycle actions.
+### Ticket Lifecycle
+1. **Reporting**: Call `POST /api/inventory/queries` to report an issue.
+2. **Auto-Update**: The UI should automatically reflect the item status as "Damaged" in the inventory list.
+3. **Closing**: To resolve an issue, call `PUT /api/inventory/queries/{id}/close` with repair costs and notes.
+4. **Revert**: The item status will automatically flip back to "Good" via the backend logic.
 
-### Integration Steps
-1. Weekly rota publish UI using `POST /api/rotas/bulk`.
-2. Rota dashboard UI using `GET /api/rotas/dashboard`.
-3. User joiner flow using `POST /api/users`.
-4. Leaver flow using `DELETE /api/users/{id}` (soft deactivate).
-5. Edit employee details with `PUT /api/users/{id}`.
+---
 
-### APIs
-- `POST /api/rotas/bulk`
-- `GET /api/rotas/dashboard`
-- `POST /api/users`
-- `PUT /api/users/{id}`
-- `DELETE /api/users/{id}`
-
-### Backend Gaps for Requested Requirement
-- Requested: managers should be limited to admin-assigned shops.
-- Current: user write actions are now constrained by assigned shops.
-- Requested: manager can always create employees.
-- Current: depends on role permissions data (`can_create_users`), not guaranteed by code alone.
-
-## Ticket 5 - Admin Dashboard
-
-### Goal
-Full organization control for admin/root users.
-
-### Integration Steps
-1. Role management UI (`/api/roles`).
-2. Shop management UI (`/api/shops`).
-3. Full staff oversight (`/api/users`, `/api/attendance`, rota dashboard).
-4. Manager/sub-manager creation and updates through user management.
-
-### APIs
-- `GET/POST/PUT/DELETE /api/roles`
-- `GET/POST/PUT/DELETE /api/shops`
-- `GET/POST/PUT/DELETE /api/users`
-- `GET /api/attendance`
-- `GET /api/rotas/dashboard`
-
-## UI Visibility Matrix (Single Login)
-
-- `can_manage_rotas`: show rota create/edit/publish actions.
-- `can_manage_inventory`: show items + queries modules.
-- `can_manual_punch`: show manual punch feature.
-- `can_create_users`: show employee create/update/deactivate actions.
-- `can_manage_shops`: show shop management module.
-- `can_manage_roles`: show role management module.
-- `can_view_all_staff`: show organization-level analytics/lists.
-
-## API Coverage Check vs Your Requirement
-
-### Available Now
-- Single login and password-change onboarding.
-- Self-profile endpoint (`GET /api/users/me`).
-- Multi-shop assignment field (`assigned_shop_ids`) on user profile and auth payload.
-- Employee self rota visibility protection.
-- Assignment-scoped read filtering for users, rotas, inventory items, and inventory queries.
-- Assignment-scoped write constraints for inventory items and inventory queries.
-- Inventory and query modules for permissioned roles.
-- Manager/admin rota publishing and dashboards.
-
-### Missing or Partial (Need Backend Tickets)
-No critical gaps pending from current requested scope.
-
-## Recommended Backend Tickets (Next)
-
-- Optional: Add richer assigned-shop dashboard endpoint with attendance + weekly rota aggregates in one payload.
-
-## Reference
-
-- Detailed role journey: `USER_FLOW.md`
+##  Handling Permissions
+The `user.role_id.permissions` object provided in the login response (or via `GET /api/users/me`) should be used to hide/show UI elements:
+- `can_manage_rotas`: Show "Add Rota" / "Bulk Upload" buttons.
+- `can_manage_inventory`: Show "Record Damage" / "Manage Stock" sections.
+- `can_manual_punch`: Show "Manual Clock-In" override buttons.
