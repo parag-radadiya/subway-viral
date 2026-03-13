@@ -43,10 +43,6 @@ const userSchema = new mongoose.Schema(
       ref: 'Shop',
       default: null,
     },
-    assigned_shop_ids: {
-      type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Shop' }],
-      default: [],
-    },
     is_active: {
       type: Boolean,
       default: true,

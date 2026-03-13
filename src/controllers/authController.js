@@ -33,7 +33,6 @@ const login = async (req, res) => {
         email: user.email,
         role: user.role_id,
         shop_id: user.shop_id,
-        assigned_shop_ids: user.assigned_shop_ids,
       },
     });
   } catch (err) {

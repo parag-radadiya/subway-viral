@@ -1,11 +1,6 @@
 const jwt = require('jsonwebtoken');
 const Attendance = require('../models/Attendance');
 const User = require('../models/User');
-const { isShopAllowed } = require('../middleware/shopScopeMiddleware');
-
-const canAccessShop = (req, shopId) => {
-  return isShopAllowed(req.shopScope, shopId);
-};
 
 // ─────────────────────────────────────────────
 // STEP 1: Verify GPS location → return a short-lived location_token
@@ -15,13 +10,6 @@ const canAccessShop = (req, shopId) => {
 const verifyLocation = async (req, res) => {
   try {
     const { shop_id } = req.body;
-
-    if (!canAccessShop(req, shop_id)) {
-      return res.status(403).json({
-        success: false,
-        message: 'Forbidden: you can only punch in at your assigned shops',
-      });
-    }
 
     // Issue a location_token (5-min TTL)
     const locationToken = jwt.sign(
@@ -48,13 +36,6 @@ const punchIn = async (req, res) => {
   try {
     const { shop_id, location_token, biometric_verified } = req.body;
     const deviceId = req.headers['x-device-id'];
-
-    if (!canAccessShop(req, shop_id)) {
-      return res.status(403).json({
-        success: false,
-        message: 'Forbidden: you can only punch in at your assigned shops',
-      });
-    }
 
     // 1. Biometric must be confirmed by frontend
     if (!biometric_verified) {
@@ -137,13 +118,6 @@ const manualPunchIn = async (req, res) => {
 
     if (!user_id || !shop_id) {
       return res.status(400).json({ success: false, message: 'user_id and shop_id are required' });
-    }
-
-    if (!canAccessShop(req, shop_id)) {
-      return res.status(403).json({
-        success: false,
-        message: 'Forbidden: you can only manual-punch for your assigned shops',
-      });
     }
 
     const staffUser = await User.findById(user_id);

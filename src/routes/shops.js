@@ -17,7 +17,7 @@ const { requirePermission } = require('../middleware/permMiddleware');
  * @swagger
  * /api/shops:
  *   get:
- *     summary: List shops (full list for privileged roles, assigned shop for staff)
+ *     summary: List all shops
  *     tags: [Shops]
  *     responses:
  *       200:
@@ -42,7 +42,7 @@ router.post('/', protect, requirePermission('can_manage_shops'), createShop);
  * @swagger
  * /api/shops/{id}:
  *   get:
- *     summary: Get shop by ID (staff can only access assigned shop)
+ *     summary: Get shop by ID
  *     tags: [Shops]
  *     parameters:
  *       - in: path
@@ -53,8 +53,6 @@ router.post('/', protect, requirePermission('can_manage_shops'), createShop);
  *     responses:
  *       200:
  *         description: Shop data
- *       403:
- *         description: Forbidden (cross-shop access for non-privileged users)
  *   put:
  *     summary: Update shop (including geofence_radius_m)
  *     tags: [Shops]

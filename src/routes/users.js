@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const {
-  getMe, getAssignedShopStaffSummary, getUsers, getUser, createUser, updateUser, deleteUser, updatePassword,
+  getUsers, getUser, createUser, updateUser, deleteUser, updatePassword,
 } = require('../controllers/userController');
 const { protect } = require('../middleware/authMiddleware');
 const { requirePermission } = require('../middleware/permMiddleware');
@@ -12,22 +12,6 @@ const { requirePermission } = require('../middleware/permMiddleware');
  *   name: Users
  *   description: User management (Admin creates — no public signup)
  */
-
-/**
- * @swagger
- * /api/users/me:
- *   get:
- *     summary: Get your own profile
- *     tags: [Users]
- *     responses:
- *       200:
- *         description: Your user profile with role permissions
- *       401:
- *         description: Unauthorized
- *       404:
- *         description: User not found
- */
-router.get('/me', protect, getMe);
 
 /**
  * @swagger
@@ -48,31 +32,6 @@ router.get('/me', protect, getMe);
  *         description: Current password incorrect
  */
 router.put('/me/password', protect, updatePassword);
-
-/**
- * @swagger
- * /api/users/assigned-shops/staff-summary:
- *   get:
- *     summary: Assigned-shop staff summary (Sub-Manager dashboard)
- *     tags: [Users]
- *     description: Returns active users grouped by assigned shops within the caller's shop scope.
- *     parameters:
- *       - in: query
- *         name: shop_id
- *         schema:
- *           type: string
- *         description: Optional single-shop filter within your allowed shop scope
- *     responses:
- *       200:
- *         description: Staff summary grouped by shop
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/AssignedShopStaffSummaryResponse'
- *       403:
- *         description: Forbidden (shop outside assigned scope)
- */
-router.get('/assigned-shops/staff-summary', protect, requirePermission('can_manual_punch'), getAssignedShopStaffSummary);
 
 /**
  * @swagger
