@@ -80,7 +80,7 @@
                                 "exec": [
                                     "if (pm.response.code === 200) {",
                                     "  const json = pm.response.json();",
-                                    "  pm.collectionVariables.set('token', json.token);",
+                                    "  pm.collectionVariables.set('token', json.data.token);",
                                     "  console.log('✅ Token saved');",
                                     "}"
                                 ],
@@ -124,7 +124,7 @@
                             "script": {
                                 "exec": [
                                     "if (pm.response.code === 200) {",
-                                    "  pm.collectionVariables.set('token', pm.response.json().token);",
+                                    "  pm.collectionVariables.set('token', pm.response.json().data.token);",
                                     "}"
                                 ],
                                 "type": "text/javascript"
@@ -167,7 +167,7 @@
                             "script": {
                                 "exec": [
                                     "if (pm.response.code === 200) {",
-                                    "  pm.collectionVariables.set('token', pm.response.json().token);",
+                                    "  pm.collectionVariables.set('token', pm.response.json().data.token);",
                                     "}"
                                 ],
                                 "type": "text/javascript"
@@ -231,7 +231,7 @@
                             "script": {
                                 "exec": [
                                     "if (pm.response.code === 201) {",
-                                    "  pm.collectionVariables.set('user_id', pm.response.json().data._id);",
+                                    "  pm.collectionVariables.set('user_id', pm.response.json().data.user._id);",
                                     "}"
                                 ],
                                 "type": "text/javascript"
@@ -380,7 +380,7 @@
                             "script": {
                                 "exec": [
                                     "if (pm.response.code === 201) {",
-                                    "  pm.collectionVariables.set('role_id', pm.response.json().data._id);",
+                                    "  pm.collectionVariables.set('role_id', pm.response.json().data.role._id);",
                                     "}"
                                 ],
                                 "type": "text/javascript"
@@ -468,7 +468,7 @@
                             "script": {
                                 "exec": [
                                     "if (pm.response.code === 200) {",
-                                    "  const shops = pm.response.json().data;",
+                                    "  const shops = pm.response.json().data.shops;",
                                     "  if (shops.length > 0) pm.collectionVariables.set('shop_id', shops[0]._id);",
                                     "}"
                                 ],
@@ -498,7 +498,7 @@
                             "script": {
                                 "exec": [
                                     "if (pm.response.code === 201) {",
-                                    "  pm.collectionVariables.set('shop_id', pm.response.json().data._id);",
+                                    "  pm.collectionVariables.set('shop_id', pm.response.json().data.shop._id);",
                                     "}"
                                 ],
                                 "type": "text/javascript"
@@ -607,7 +607,7 @@
                             "script": {
                                 "exec": [
                                     "if (pm.response.code === 201) {",
-                                    "  pm.collectionVariables.set('rota_id', pm.response.json().data._id);",
+                                    "  pm.collectionVariables.set('rota_id', pm.response.json().data.rota._id);",
                                     "}"
                                 ],
                                 "type": "text/javascript"
@@ -651,7 +651,7 @@
                             "script": {
                                 "exec": [
                                     "if (pm.response.code === 200) {",
-                                    "  pm.collectionVariables.set('location_token', pm.response.json().location_token);",
+                                    "  pm.collectionVariables.set('location_token', pm.response.json().data.location_token);",
                                     "  console.log('✅ location_token saved');",
                                     "}"
                                 ],
@@ -692,7 +692,7 @@
                             "script": {
                                 "exec": [
                                     "if (pm.response.code === 201) {",
-                                    "  pm.collectionVariables.set('attendance_id', pm.response.json().data._id);",
+                                    "  pm.collectionVariables.set('attendance_id', pm.response.json().data.attendance._id);",
                                     "  console.log('✅ attendance_id saved');",
                                     "}"
                                 ],
@@ -756,7 +756,7 @@
                             "script": {
                                 "exec": [
                                     "if (pm.response.code === 201) {",
-                                    "  pm.collectionVariables.set('attendance_id', pm.response.json().data._id);",
+                                    "  pm.collectionVariables.set('attendance_id', pm.response.json().data.attendance._id);",
                                     "}"
                                 ],
                                 "type": "text/javascript"
@@ -857,7 +857,7 @@
                             "script": {
                                 "exec": [
                                     "if (pm.response.code === 201) {",
-                                    "  pm.collectionVariables.set('item_id', pm.response.json().data._id);",
+                                    "  pm.collectionVariables.set('item_id', pm.response.json().data.item._id);",
                                     "}"
                                 ],
                                 "type": "text/javascript"
@@ -988,7 +988,7 @@
                             "script": {
                                 "exec": [
                                     "if (pm.response.code === 201) {",
-                                    "  pm.collectionVariables.set('query_id', pm.response.json().data._id);",
+                                    "  pm.collectionVariables.set('query_id', pm.response.json().data.query._id);",
                                     "  console.log('✅ Item should now be Damaged');",
                                     "}"
                                 ],

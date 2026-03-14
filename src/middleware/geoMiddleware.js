@@ -1,4 +1,5 @@
 const Shop = require('../models/Shop');
+const AppError = require('../utils/AppError');
 
 /**
  * Haversine formula — returns distance between two lat/lng points in metres.
@@ -24,15 +25,12 @@ const validateGeofence = async (req, res, next) => {
     const { shop_id, latitude, longitude } = req.body;
 
     if (!shop_id || latitude == null || longitude == null) {
-      return res.status(400).json({
-        success: false,
-        message: 'shop_id, latitude, and longitude are required',
-      });
+      return next(new AppError('shop_id, latitude, and longitude are required', 400));
     }
 
     const shop = await Shop.findById(shop_id);
     if (!shop) {
-      return res.status(404).json({ success: false, message: 'Shop not found' });
+      return next(new AppError('Shop not found', 404));
     }
 
     const distance = haversineDistance(
@@ -43,16 +41,16 @@ const validateGeofence = async (req, res, next) => {
     );
 
     if (distance > shop.geofence_radius_m) {
-      return res.status(403).json({
-        success: false,
-        message: `You are ${Math.round(distance)}m away. Must be within ${shop.geofence_radius_m}m of ${shop.name}.`,
-      });
+      return next(new AppError(
+        `You are ${Math.round(distance)}m away. Must be within ${shop.geofence_radius_m}m of ${shop.name}.`,
+        403
+      ));
     }
 
     req.shop = shop;
     next();
   } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
+    return next(err);
   }
 };
 

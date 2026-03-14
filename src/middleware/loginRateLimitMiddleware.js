@@ -14,8 +14,9 @@ const loginRateLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: {
-    success: false,
+    status: 429,
     message: 'Too many login attempts. Please try again later.',
+    data: {},
   },
 });
 
