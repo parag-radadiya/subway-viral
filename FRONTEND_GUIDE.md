@@ -2,13 +2,31 @@
 
 This guide outlines the core user flows and integration logic for building a frontend on top of the Staff & Inventory Management API.
 
+## API Response Contract (All Endpoints)
+
+Every API now returns a unified envelope:
+
+```json
+{
+  "status": 200,
+  "message": "Human readable message",
+  "data": {}
+}
+```
+
+- `status`: mirrors the HTTP status code.
+- `message`: user-friendly or developer-friendly summary.
+- `data`: payload object (empty object when there is no payload).
+
+Error responses also follow the same envelope (for example `400`, `401`, `403`, `404`, `409`, `429`, `500`).
+
 ---
 
 ##  Authentication & Onboarding
 
 ### Flow: Initial Login
 1. **Login**: `POST /api/auth/login`.
-2. **Response Check**: If `must_change_password: true`, immediately redirect the user to a "Change Password" screen.
+2. **Response Check**: If `data.must_change_password: true`, immediately redirect the user to a "Change Password" screen.
 3. **Password Update**: `PUT /api/users/me/password` (Requires providing `currentPassword`).
 4. **Completion**: Once updated, the user can proceed to the dashboard.
 
@@ -72,7 +90,7 @@ The punch-in process is a 3-step security handshake:
 ---
 
 ##  Handling Permissions
-The `user.role_id.permissions` object provided in the login response (or via `GET /api/users/me`) should be used to hide/show UI elements:
+The `data.user.role.permissions` object from the login response should be used to hide/show UI elements:
 - `can_manage_rotas`: Show "Add Rota" / "Bulk Upload" buttons.
 - `can_manage_inventory`: Show "Record Damage" / "Manage Stock" sections.
 - `can_manual_punch`: Show "Manual Clock-In" override buttons.

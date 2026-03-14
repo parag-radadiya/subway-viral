@@ -38,10 +38,16 @@ const options = {
         LoginResponse: {
           type: 'object',
           properties: {
-            success: { type: 'boolean' },
-            token: { type: 'string' },
-            must_change_password: { type: 'boolean' },
-            user: { $ref: '#/components/schemas/UserPublic' },
+            status: { type: 'integer', example: 200 },
+            message: { type: 'string', example: 'Login successful' },
+            data: {
+              type: 'object',
+              properties: {
+                token: { type: 'string' },
+                must_change_password: { type: 'boolean' },
+                user: { $ref: '#/components/schemas/UserPublic' },
+              },
+            },
           },
         },
 
@@ -188,37 +194,48 @@ const options = {
         BulkRotaResponse: {
           type: 'object',
           properties: {
-            success: { type: 'boolean' },
-            created: { type: 'integer', description: 'Number of new rota records inserted' },
-            skipped: { type: 'integer', description: 'Number of entries skipped due to conflicts' },
-            conflicts: {
-              type: 'array',
-              items: {
-                type: 'object',
-                properties: {
-                  user_id: { type: 'string' },
-                  date: { type: 'string' },
-                  start_time: { type: 'string' },
-                  reason: { type: 'string' },
+            status: { type: 'integer', example: 201 },
+            message: { type: 'string' },
+            data: {
+              type: 'object',
+              properties: {
+                created: { type: 'integer', description: 'Number of new rota records inserted' },
+                skipped: { type: 'integer', description: 'Number of entries skipped due to conflicts' },
+                conflicts: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      user_id: { type: 'string' },
+                      date: { type: 'string' },
+                      start_time: { type: 'string' },
+                      reason: { type: 'string' },
+                    },
+                  },
                 },
               },
             },
-            message: { type: 'string' },
           },
         },
         WeekViewResponse: {
           type: 'object',
           properties: {
-            success: { type: 'boolean' },
-            week_start: { type: 'string' },
-            week_end: { type: 'string' },
-            shop_id: { type: 'string' },
-            days: {
+            status: { type: 'integer', example: 200 },
+            message: { type: 'string' },
+            data: {
               type: 'object',
-              description: 'Keys are day labels (e.g. "Mon 16 Mar"), values are arrays of Rota records',
-              additionalProperties: {
-                type: 'array',
-                items: { $ref: '#/components/schemas/Rota' },
+              properties: {
+                week_start: { type: 'string' },
+                week_end: { type: 'string' },
+                shop_id: { type: 'string' },
+                days: {
+                  type: 'object',
+                  description: 'Keys are day labels (e.g. "Mon 16 Mar"), values are arrays of Rota records',
+                  additionalProperties: {
+                    type: 'array',
+                    items: { $ref: '#/components/schemas/Rota' },
+                  },
+                },
               },
             },
           },
@@ -226,41 +243,47 @@ const options = {
         DashboardResponse: {
           type: 'object',
           properties: {
-            success: { type: 'boolean' },
-            week_start: { type: 'string' },
-            week_end: { type: 'string' },
-            total_shifts: { type: 'integer' },
-            by_shop: {
-              type: 'array',
-              items: {
-                type: 'object',
-                properties: {
-                  shop: { $ref: '#/components/schemas/Shop' },
-                  days: {
+            status: { type: 'integer', example: 200 },
+            message: { type: 'string' },
+            data: {
+              type: 'object',
+              properties: {
+                week_start: { type: 'string' },
+                week_end: { type: 'string' },
+                total_shifts: { type: 'integer' },
+                by_shop: {
+                  type: 'array',
+                  items: {
                     type: 'object',
-                    description: 'Keys: "Mon 16 Mar" etc. Values: shift entries for that day',
-                    additionalProperties: { type: 'array', items: { type: 'object' } },
+                    properties: {
+                      shop: { $ref: '#/components/schemas/Shop' },
+                      days: {
+                        type: 'object',
+                        description: 'Keys: "Mon 16 Mar" etc. Values: shift entries for that day',
+                        additionalProperties: { type: 'array', items: { type: 'object' } },
+                      },
+                    },
                   },
                 },
-              },
-            },
-            by_employee: {
-              type: 'array',
-              items: {
-                type: 'object',
-                properties: {
-                  user: { $ref: '#/components/schemas/UserPublic' },
-                  shifts: {
-                    type: 'array',
-                    items: {
-                      type: 'object',
-                      properties: {
-                        rota_id: { type: 'string' },
-                        date: { type: 'string', format: 'date' },
-                        shop: { $ref: '#/components/schemas/Shop' },
-                        start_time: { type: 'string' },
-                        end_time: { type: 'string' },
-                        note: { type: 'string' },
+                by_employee: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      user: { $ref: '#/components/schemas/UserPublic' },
+                      shifts: {
+                        type: 'array',
+                        items: {
+                          type: 'object',
+                          properties: {
+                            rota_id: { type: 'string' },
+                            date: { type: 'string', format: 'date' },
+                            shop: { $ref: '#/components/schemas/Shop' },
+                            start_time: { type: 'string' },
+                            end_time: { type: 'string' },
+                            note: { type: 'string' },
+                          },
+                        },
                       },
                     },
                   },
@@ -370,15 +393,17 @@ const options = {
         SuccessResponse: {
           type: 'object',
           properties: {
-            success: { type: 'boolean', example: true },
-            message: { type: 'string' },
+            status: { type: 'integer', example: 200 },
+            message: { type: 'string', example: 'Request completed successfully' },
+            data: { type: 'object', example: {} },
           },
         },
         ErrorResponse: {
           type: 'object',
           properties: {
-            success: { type: 'boolean', example: false },
-            message: { type: 'string' },
+            status: { type: 'integer', example: 400 },
+            message: { type: 'string', example: 'Validation failed' },
+            data: { type: 'object', example: {} },
           },
         },
       },

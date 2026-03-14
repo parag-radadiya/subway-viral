@@ -15,6 +15,8 @@ const rotaRoutes = require('./routes/rotas');
 const attendanceRoutes = require('./routes/attendance');
 const inventoryItemRoutes = require('./routes/inventoryItems');
 const inventoryQueryRoutes = require('./routes/inventoryQueries');
+const { sendSuccess } = require('./utils/response');
+const { notFoundHandler, globalErrorHandler } = require('./middleware/errorHandler');
 
 // Connect to MongoDB
 connectDB();
@@ -28,7 +30,9 @@ app.use(cors());
 app.use(express.json());
 
 // Health check
-app.get('/health', (req, res) => res.json({ status: 'OK', timestamp: new Date() }));
+app.get('/health', (req, res) => sendSuccess(res, 'Service is healthy', {
+  timestamp: new Date().toISOString(),
+}));
 
 // Swagger UI — http://localhost:5000/api-docs
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
@@ -36,7 +40,7 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
   swaggerOptions: { persistAuthorization: true },
 }));
 // Raw OpenAPI JSON — useful for Postman import
-app.get('/api-docs.json', (req, res) => res.json(swaggerSpec));
+app.get('/api-docs.json', (req, res) => sendSuccess(res, 'OpenAPI spec fetched', swaggerSpec));
 
 // API routes
 app.use('/api/auth', authRoutes);
@@ -48,16 +52,9 @@ app.use('/api/attendance', attendanceRoutes);
 app.use('/api/inventory/items', inventoryItemRoutes);
 app.use('/api/inventory/queries', inventoryQueryRoutes);
 
-// 404 handler
-app.use((req, res) => {
-  res.status(404).json({ success: false, message: `Route ${req.originalUrl} not found` });
-});
-
-// Global error handler
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ success: false, message: 'Internal server error' });
-});
+// 404 + global error handlers
+app.use(notFoundHandler);
+app.use(globalErrorHandler);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {

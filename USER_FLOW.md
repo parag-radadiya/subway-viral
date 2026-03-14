@@ -6,16 +6,15 @@ This document defines the frontend user journey after **one login endpoint**: `P
 
 1. User enters email + password.
 2. Frontend calls `POST /api/auth/login`.
-3. If `must_change_password = true`, force `PUT /api/users/me/password` before dashboard access.
-4. After password flow, frontend calls `GET /api/users/me`.
-5. Frontend derives role + permissions from `data.role_id.permissions` and shows the correct dashboard.
+3. If `data.must_change_password = true`, force `PUT /api/users/me/password` before dashboard access.
+4. Frontend derives role + permissions from `data.user.role.permissions` and shows the correct dashboard.
 
 ## 2) Role Routing After Login
 
 - **Employee (Staff)**
   - Default route: Employee Dashboard
   - Visible modules:
-    - My Profile (`GET /api/users/me`)
+    - My Profile (use `data.user` from login response)
     - My Rotas (`GET /api/rotas`, `GET /api/rotas/week`)
     - Punch In (`POST /api/attendance/verify-location`, `POST /api/attendance/punch-in`)
     - Punch Out (`PUT /api/attendance/{id}/punch-out`)
@@ -46,7 +45,7 @@ This document defines the frontend user journey after **one login endpoint**: `P
 
 ## 3) Screen Visibility Rules
 
-Use backend permissions from `GET /api/users/me` only (do not hardcode by role name).
+Use backend permissions from login response `data.user.role.permissions` (do not hardcode by role name).
 
 - `can_manage_rotas` -> Show rota create/edit/publish tools.
 - `can_manage_inventory` -> Show inventory + query modules.

@@ -1,58 +1,41 @@
 const Role = require('../models/Role');
+const AppError = require('../utils/AppError');
+const asyncHandler = require('../utils/asyncHandler');
+const { sendSuccess } = require('../utils/response');
 
 // GET /api/roles
-const getRoles = async (req, res) => {
-  try {
-    const roles = await Role.find();
-    res.json({ success: true, data: roles });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-};
+const getRoles = asyncHandler(async (req, res) => {
+  const roles = await Role.find();
+  return sendSuccess(res, 'Roles fetched successfully', { roles });
+});
 
 // GET /api/roles/:id
-const getRole = async (req, res) => {
-  try {
-    const role = await Role.findById(req.params.id);
-    if (!role) return res.status(404).json({ success: false, message: 'Role not found' });
-    res.json({ success: true, data: role });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-};
+const getRole = asyncHandler(async (req, res) => {
+  const role = await Role.findById(req.params.id);
+  if (!role) throw new AppError('Role not found', 404);
+  return sendSuccess(res, 'Role fetched successfully', { role });
+});
 
 // POST /api/roles
-const createRole = async (req, res) => {
-  try {
-    const role = await Role.create(req.body);
-    res.status(201).json({ success: true, data: role });
-  } catch (err) {
-    res.status(400).json({ success: false, message: err.message });
-  }
-};
+const createRole = asyncHandler(async (req, res) => {
+  const role = await Role.create(req.body);
+  return sendSuccess(res, 'Role created successfully', { role }, 201);
+});
 
 // PUT /api/roles/:id
-const updateRole = async (req, res) => {
-  try {
-    const role = await Role.findByIdAndUpdate(req.params.id, req.body, {
-      new: true, runValidators: true,
-    });
-    if (!role) return res.status(404).json({ success: false, message: 'Role not found' });
-    res.json({ success: true, data: role });
-  } catch (err) {
-    res.status(400).json({ success: false, message: err.message });
-  }
-};
+const updateRole = asyncHandler(async (req, res) => {
+  const role = await Role.findByIdAndUpdate(req.params.id, req.body, {
+    new: true, runValidators: true,
+  });
+  if (!role) throw new AppError('Role not found', 404);
+  return sendSuccess(res, 'Role updated successfully', { role });
+});
 
 // DELETE /api/roles/:id
-const deleteRole = async (req, res) => {
-  try {
-    const role = await Role.findByIdAndDelete(req.params.id);
-    if (!role) return res.status(404).json({ success: false, message: 'Role not found' });
-    res.json({ success: true, message: 'Role deleted' });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-};
+const deleteRole = asyncHandler(async (req, res) => {
+  const role = await Role.findByIdAndDelete(req.params.id);
+  if (!role) throw new AppError('Role not found', 404);
+  return sendSuccess(res, 'Role deleted', { role });
+});
 
 module.exports = { getRoles, getRole, createRole, updateRole, deleteRole };

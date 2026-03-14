@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const AppError = require('../utils/AppError');
 
 const protect = async (req, res, next) => {
   let token;
@@ -12,7 +13,7 @@ const protect = async (req, res, next) => {
   }
 
   if (!token) {
-    return res.status(401).json({ success: false, message: 'Not authorized, no token' });
+    return next(new AppError('Not authorized, no token', 401));
   }
 
   try {
@@ -22,12 +23,12 @@ const protect = async (req, res, next) => {
       .populate('role_id');
 
     if (!req.user || !req.user.is_active) {
-      return res.status(401).json({ success: false, message: 'User not found or deactivated' });
+      return next(new AppError('User not found or deactivated', 401));
     }
 
     next();
   } catch (err) {
-    return res.status(401).json({ success: false, message: 'Token invalid or expired' });
+    return next(new AppError('Token invalid or expired', 401));
   }
 };
 

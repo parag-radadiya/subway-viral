@@ -27,6 +27,24 @@ A robust Node.js and MongoDB backend designed for efficient employee scheduling,
 - **Issue Ticketing (Queries)**: Streamlined reporting of damaged items.
 - **Real-Time Status Sync**: Opening a query ticket automatically marks the item as 'Damaged'; closing the ticket reverts it to 'Good'.
 
+## API Response Standard
+
+All API responses are centralized and return the same envelope:
+
+```json
+{
+  "status": 200,
+  "message": "Request completed successfully",
+  "data": {}
+}
+```
+
+- `status` always mirrors the HTTP code.
+- `message` is a readable summary.
+- `data` contains the payload object (or `{}` if no payload).
+
+This same structure is used for error responses as well (for example `400`, `401`, `403`, `404`, `409`, `429`, `500`).
+
 ## 🛠 Tech Stack
 - **Runtime**: Node.js
 - **Framework**: Express.js

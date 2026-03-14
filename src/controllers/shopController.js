@@ -1,58 +1,41 @@
 const Shop = require('../models/Shop');
+const AppError = require('../utils/AppError');
+const asyncHandler = require('../utils/asyncHandler');
+const { sendSuccess } = require('../utils/response');
 
 // GET /api/shops
-const getShops = async (req, res) => {
-  try {
-    const shops = await Shop.find();
-    res.json({ success: true, data: shops });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-};
+const getShops = asyncHandler(async (req, res) => {
+  const shops = await Shop.find();
+  return sendSuccess(res, 'Shops fetched successfully', { shops });
+});
 
 // GET /api/shops/:id
-const getShop = async (req, res) => {
-  try {
-    const shop = await Shop.findById(req.params.id);
-    if (!shop) return res.status(404).json({ success: false, message: 'Shop not found' });
-    res.json({ success: true, data: shop });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-};
+const getShop = asyncHandler(async (req, res) => {
+  const shop = await Shop.findById(req.params.id);
+  if (!shop) throw new AppError('Shop not found', 404);
+  return sendSuccess(res, 'Shop fetched successfully', { shop });
+});
 
 // POST /api/shops
-const createShop = async (req, res) => {
-  try {
-    const shop = await Shop.create(req.body);
-    res.status(201).json({ success: true, data: shop });
-  } catch (err) {
-    res.status(400).json({ success: false, message: err.message });
-  }
-};
+const createShop = asyncHandler(async (req, res) => {
+  const shop = await Shop.create(req.body);
+  return sendSuccess(res, 'Shop created successfully', { shop }, 201);
+});
 
 // PUT /api/shops/:id
-const updateShop = async (req, res) => {
-  try {
-    const shop = await Shop.findByIdAndUpdate(req.params.id, req.body, {
-      new: true, runValidators: true,
-    });
-    if (!shop) return res.status(404).json({ success: false, message: 'Shop not found' });
-    res.json({ success: true, data: shop });
-  } catch (err) {
-    res.status(400).json({ success: false, message: err.message });
-  }
-};
+const updateShop = asyncHandler(async (req, res) => {
+  const shop = await Shop.findByIdAndUpdate(req.params.id, req.body, {
+    new: true, runValidators: true,
+  });
+  if (!shop) throw new AppError('Shop not found', 404);
+  return sendSuccess(res, 'Shop updated successfully', { shop });
+});
 
 // DELETE /api/shops/:id
-const deleteShop = async (req, res) => {
-  try {
-    const shop = await Shop.findByIdAndDelete(req.params.id);
-    if (!shop) return res.status(404).json({ success: false, message: 'Shop not found' });
-    res.json({ success: true, message: 'Shop deleted' });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-};
+const deleteShop = asyncHandler(async (req, res) => {
+  const shop = await Shop.findByIdAndDelete(req.params.id);
+  if (!shop) throw new AppError('Shop not found', 404);
+  return sendSuccess(res, 'Shop deleted', { shop });
+});
 
 module.exports = { getShops, getShop, createShop, updateShop, deleteShop };
