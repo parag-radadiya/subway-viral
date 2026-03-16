@@ -1,4 +1,16 @@
 const swaggerJsdoc = require('swagger-jsdoc');
+const path = require('path');
+
+const routeDocsGlob = path.resolve(__dirname, '../routes/*.js');
+const normalizeServerUrl = (value) => {
+  if (!value) return 'http://localhost:3000';
+  if (value.startsWith('http://') || value.startsWith('https://')) {
+    return value.replace(/\/+$/, '');
+  }
+  return `https://${value.replace(/\/+$/, '')}`;
+};
+
+const serverUrl = normalizeServerUrl(process.env.VERCEL_URL);
 
 const options = {
   definition: {
@@ -14,7 +26,7 @@ const options = {
       },
     },
     servers: [
-      { url: 'http://localhost:3000', description: 'Local development' },
+      { url: serverUrl, description: process.env.VERCEL_URL ? 'Vercel deployment' : 'Local development' },
     ],
     components: {
       securitySchemes: {
@@ -410,7 +422,7 @@ const options = {
     },
     security: [{ BearerAuth: [] }],
   },
-  apis: ['./src/routes/*.js'], // JSDoc comments in route files
+  apis: [routeDocsGlob],
 };
 
 const swaggerSpec = swaggerJsdoc(options);
