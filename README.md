@@ -91,6 +91,50 @@ This same structure is used for error responses as well (for example `400`, `401
 - **Swagger UI**: Accessible at `http://localhost:3000/api-docs` when the server is running.
 - **Postman**: Import the provided `postman_collection.json` to immediate testing.
 
+## Deploy to Vercel
+
+This project is ready for Vercel using `api/index.js` as the serverless entrypoint.
+
+### 1) Push code to GitHub
+
+Vercel deploys from your Git repository.
+
+### 2) Import project in Vercel
+
+- Open Vercel dashboard.
+- Click **Add New Project**.
+- Select this repo.
+- Framework preset: **Other** (Node.js serverless API).
+
+### 3) Configure environment variables
+
+Add these in Vercel project settings for each environment (Preview/Production):
+
+- `MONGO_URI`
+- `JWT_SECRET`
+- `JWT_EXPIRES_IN`
+- `LOCATION_TOKEN_SECRET`
+- `LOCATION_TOKEN_TTL_MINUTES`
+- `LOGIN_RATE_LIMIT_WINDOW_MINUTES`
+- `LOGIN_RATE_LIMIT_MAX_ATTEMPTS`
+
+### 4) Deploy
+
+Trigger deploy from Vercel UI or push to the connected branch.
+
+### 5) Verify deployment
+
+After deploy, check:
+
+- `https://<your-vercel-domain>/health`
+- `https://<your-vercel-domain>/api-docs`
+
+All API routes continue to work under the same paths, for example:
+
+- `POST /api/auth/login`
+- `GET /api/users`
+- `POST /api/attendance/punch-in`
+
 ## ✅ Automated Test Setup (with Sandbox DB)
 
 The project now includes Jest + Supertest integration tests under `tests/`.
