@@ -173,6 +173,22 @@ describe('Users module integration', () => {
     expectEnvelope(res, 403);
   });
 
+  it('USER summary: manager can read assigned-shops staff summary and staff is forbidden', async () => {
+    const managerLogin = await login('manager@org.com', 'Manager@1234');
+    const staffLogin = await login('staff@org.com', 'Staff@1234');
+
+    const allowedRes = await request(app)
+      .get('/api/users/assigned-shops/staff-summary')
+      .set('Authorization', `Bearer ${managerLogin.token}`);
+    expectEnvelope(allowedRes, 200);
+    expect(Array.isArray(allowedRes.body.data.shops)).toBe(true);
+
+    const forbiddenRes = await request(app)
+      .get('/api/users/assigned-shops/staff-summary')
+      .set('Authorization', `Bearer ${staffLogin.token}`);
+    expectEnvelope(forbiddenRes, 403);
+  });
+
   it('SEC-001: rejects protected endpoint without token', async () => {
     const res = await request(app).get('/api/users');
     expectEnvelope(res, 401);

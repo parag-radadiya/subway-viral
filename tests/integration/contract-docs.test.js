@@ -51,14 +51,15 @@ describe('Contract and documentation checks', () => {
     expectEnvelope(itemsRes, 200);
   });
 
-  it('DOC-003: user flow endpoint /api/users/assigned-shops/staff-summary is currently missing', async () => {
+  it('DOC-003: user flow endpoint /api/users/assigned-shops/staff-summary is callable for manager', async () => {
     const managerLogin = await login('manager@org.com', 'Manager@1234');
 
     const res = await request(app)
       .get('/api/users/assigned-shops/staff-summary')
       .set('Authorization', `Bearer ${managerLogin.token}`);
 
-    expectEnvelope(res, 404);
+    expectEnvelope(res, 200);
+    expect(Array.isArray(res.body.data.shops)).toBe(true);
   });
 });
 

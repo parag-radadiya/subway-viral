@@ -102,6 +102,7 @@ const seedTestData = async () => {
     role_id: rootRole._id,
     device_id: 'root-device-001',
     shop_id: mainShop._id,
+    assigned_shop_ids: [mainShop._id, eastShop._id],
     must_change_password: false,
   }));
 
@@ -114,6 +115,7 @@ const seedTestData = async () => {
     role_id: adminRole._id,
     device_id: 'admin-device-001',
     shop_id: mainShop._id,
+    assigned_shop_ids: [mainShop._id, eastShop._id],
     must_change_password: true,
   }));
 
@@ -126,6 +128,7 @@ const seedTestData = async () => {
     role_id: managerRole._id,
     device_id: 'mgr-device-001',
     shop_id: mainShop._id,
+    assigned_shop_ids: [mainShop._id, eastShop._id],
     must_change_password: true,
   }));
 
@@ -138,6 +141,7 @@ const seedTestData = async () => {
     role_id: subMgrRole._id,
     device_id: 'submgr-device-001',
     shop_id: mainShop._id,
+    assigned_shop_ids: [mainShop._id, eastShop._id],
     must_change_password: true,
   }));
 
@@ -150,6 +154,7 @@ const seedTestData = async () => {
     role_id: staffRole._id,
     device_id: 'staff-device-001',
     shop_id: mainShop._id,
+    assigned_shop_ids: [mainShop._id],
     must_change_password: true,
   }));
 

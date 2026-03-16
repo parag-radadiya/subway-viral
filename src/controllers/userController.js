@@ -1,7 +1,9 @@
 const User = require('../models/User');
+const Shop = require('../models/Shop');
 const AppError = require('../utils/AppError');
 const asyncHandler = require('../utils/asyncHandler');
 const { sendSuccess } = require('../utils/response');
+const { buildShopScope } = require('../middleware/shopScopeMiddleware');
 
 // @route  GET /api/users
 // @access Admin/Manager
@@ -32,7 +34,17 @@ const getUser = asyncHandler(async (req, res) => {
 // @route  POST /api/users
 // @access Admin only (requires can_create_users permission)
 const createUser = asyncHandler(async (req, res) => {
-  const { name, email, phone_code, phone_num, password, role_id, device_id, shop_id } = req.body;
+  const {
+    name,
+    email,
+    phone_code,
+    phone_num,
+    password,
+    role_id,
+    device_id,
+    shop_id,
+    assigned_shop_ids,
+  } = req.body;
 
   const existing = await User.findOne({ email });
   if (existing) {
@@ -49,6 +61,7 @@ const createUser = asyncHandler(async (req, res) => {
     role_id,
     device_id,
     shop_id,
+    assigned_shop_ids,
     must_change_password: true,
   });
 
@@ -59,10 +72,28 @@ const createUser = asyncHandler(async (req, res) => {
 // @route  PUT /api/users/:id
 // @access Admin
 const updateUser = asyncHandler(async (req, res) => {
-  const { name, email, phone_code, phone_num, role_id, device_id, shop_id } = req.body;
+  const {
+    name,
+    email,
+    phone_code,
+    phone_num,
+    role_id,
+    device_id,
+    shop_id,
+    assigned_shop_ids,
+  } = req.body;
   const user = await User.findByIdAndUpdate(
     req.params.id,
-    { name, email, phone_code, phone_num, role_id, device_id, shop_id },
+    {
+      name,
+      email,
+      phone_code,
+      phone_num,
+      role_id,
+      device_id,
+      shop_id,
+      assigned_shop_ids,
+    },
     { new: true, runValidators: true }
   ).populate('role_id', 'role_name');
 
@@ -109,4 +140,71 @@ const updatePassword = asyncHandler(async (req, res) => {
   return sendSuccess(res, 'Password updated successfully', {});
 });
 
-module.exports = { getUsers, getUser, createUser, updateUser, deleteUser, updatePassword };
+// @route GET /api/users/assigned-shops/staff-summary
+// @access Manager/Sub-Manager/Admin/Root scoped by assigned shops
+const getAssignedShopsStaffSummary = asyncHandler(async (req, res) => {
+  const permissions = req.user?.role_id?.permissions || {};
+  const canAccessSummary = Boolean(
+    permissions.can_view_all_staff || permissions.can_manage_inventory || permissions.can_manual_punch
+  );
+  if (!canAccessSummary) {
+    throw new AppError('Forbidden: not allowed to view staff summary', 403);
+  }
+
+  const shopScope = buildShopScope(req.user);
+  if (!shopScope.all && shopScope.ids.length === 0) {
+    return sendSuccess(res, 'Assigned-shops staff summary fetched successfully', {
+      count: 0,
+      shops: [],
+    });
+  }
+
+  const shopFilter = shopScope.all ? {} : { _id: { $in: shopScope.ids } };
+  const shops = await Shop.find(shopFilter).select('name geofence_radius_m');
+  const shopIds = shops.map((shop) => shop._id);
+
+  const users = await User.find({ is_active: true, shop_id: { $in: shopIds } })
+    .populate('role_id', 'role_name')
+    .populate('shop_id', 'name');
+
+  const staffUsers = users.filter((user) => user.role_id?.role_name === 'Staff');
+  const byShop = {};
+  shops.forEach((shop) => {
+    byShop[shop._id.toString()] = {
+      shop: {
+        _id: shop._id,
+        name: shop.name,
+      },
+      staff_count: 0,
+      staff: [],
+    };
+  });
+
+  staffUsers.forEach((user) => {
+    const sid = user.shop_id?._id?.toString();
+    if (!sid || !byShop[sid]) return;
+    byShop[sid].staff.push({
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      phone_code: user.phone_code,
+      phone_num: user.phone_num,
+    });
+    byShop[sid].staff_count += 1;
+  });
+
+  return sendSuccess(res, 'Assigned-shops staff summary fetched successfully', {
+    count: Object.values(byShop).length,
+    shops: Object.values(byShop),
+  });
+});
+
+module.exports = {
+  getUsers,
+  getUser,
+  createUser,
+  updateUser,
+  deleteUser,
+  updatePassword,
+  getAssignedShopsStaffSummary,
+};
