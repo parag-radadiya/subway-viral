@@ -1,5 +1,6 @@
 const { sendResponse } = require('../utils/response');
 const AppError = require('../utils/AppError');
+const { recordErrorLog } = require('../utils/observability');
 
 const notFoundHandler = (req, res, next) => {
   next(new AppError(`Route ${req.originalUrl} not found`, 404));
@@ -38,6 +39,18 @@ const globalErrorHandler = (err, req, res, _next) => {
       data = {};
     }
   }
+
+  recordErrorLog({
+    req,
+    statusCode,
+    message,
+    stack: statusCode >= 500 ? err.stack : null,
+    meta: {
+      error_name: err.name,
+      original_message: err.message,
+    },
+  });
+  res.locals.errorLogged = true;
 
   return sendResponse(res, statusCode, message, data);
 };
