@@ -91,6 +91,48 @@ This same structure is used for error responses as well (for example `400`, `401
 - **Swagger UI**: Accessible at `http://localhost:3000/api-docs` when the server is running.
 - **Postman**: Import the provided `postman_collection.json` to immediate testing.
 
+## ✅ Automated Test Setup (with Sandbox DB)
+
+The project now includes Jest + Supertest integration tests under `tests/`.
+
+### Install dependencies
+
+```bash
+npm install
+```
+
+### Run tests
+
+```bash
+npm test
+```
+
+### Coverage mode
+
+```bash
+npm run test:ci
+```
+
+### Sandbox database strategy
+
+- Default: tests use an isolated in-memory MongoDB instance (`mongodb-memory-server`).
+- This prevents test data from touching your local/staging/prod MongoDB.
+- Test data is reseeded before each test so results stay deterministic.
+
+### Optional external sandbox DB
+
+If you need to run tests against a real sandbox MongoDB, create `.env.test` from `.env.test.example` and set your sandbox values.
+
+### Current automated coverage
+
+- Auth and onboarding (`tests/integration/auth.test.js`)
+- User permission gates (`tests/integration/users.test.js`)
+- Attendance handshake and manual punch flows (`tests/integration/attendance.test.js`)
+- Inventory + query lifecycle status sync (`tests/integration/inventory.test.js`)
+- Rota bulk/dashboard access control (`tests/integration/rotas.test.js`)
+
+Reference checklist: `TEST_CASES.md`
+
 ---
 
 ### Root Administrator Credentials (Post-Seed)
