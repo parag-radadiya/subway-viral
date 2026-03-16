@@ -1,7 +1,13 @@
 const express = require('express');
 const router = express.Router();
 const {
-  getUsers, getUser, createUser, updateUser, deleteUser, updatePassword,
+  getUsers,
+  getUser,
+  createUser,
+  updateUser,
+  deleteUser,
+  updatePassword,
+  getAssignedShopsStaffSummary,
 } = require('../controllers/userController');
 const { protect } = require('../middleware/authMiddleware');
 const { requirePermission } = require('../middleware/permMiddleware');
@@ -59,6 +65,8 @@ router.put('/me/password', protect, updatePassword);
  */
 router.get('/', protect, requirePermission('can_view_all_staff'), getUsers);
 router.post('/', protect, requirePermission('can_create_users'), createUser);
+
+router.get('/assigned-shops/staff-summary', protect, getAssignedShopsStaffSummary);
 
 /**
  * @swagger
