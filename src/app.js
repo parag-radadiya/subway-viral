@@ -14,8 +14,10 @@ const rotaRoutes = require('./routes/rotas');
 const attendanceRoutes = require('./routes/attendance');
 const inventoryItemRoutes = require('./routes/inventoryItems');
 const inventoryQueryRoutes = require('./routes/inventoryQueries');
+const observabilityRoutes = require('./routes/observability');
 const { sendSuccess } = require('./utils/response');
 const { notFoundHandler, globalErrorHandler } = require('./middleware/errorHandler');
+const { requestAnalytics } = require('./middleware/requestAnalyticsMiddleware');
 
 const app = express();
 
@@ -24,6 +26,7 @@ const app = express();
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors());
 app.use(express.json());
+app.use(requestAnalytics);
 
 // Health check
 app.get('/health', (req, res) => sendSuccess(res, 'Service is healthy', {
@@ -47,6 +50,7 @@ app.use('/api/rotas', rotaRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/inventory/items', inventoryItemRoutes);
 app.use('/api/inventory/queries', inventoryQueryRoutes);
+app.use('/api/observability', observabilityRoutes);
 
 // 404 + global error handlers
 app.use(notFoundHandler);
