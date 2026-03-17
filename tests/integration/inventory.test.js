@@ -1,6 +1,8 @@
 const request = require('supertest');
 const app = require('../../src/app');
 const InventoryItem = require('../../src/models/InventoryItem');
+const InventoryQuery = require('../../src/models/InventoryQuery');
+const User = require('../../src/models/User');
 const { expectEnvelope } = require('../helpers/assertions');
 const { login } = require('../helpers/auth');
 const { seedTestData } = require('../helpers/seedTestData');
@@ -175,6 +177,80 @@ describe('Inventory and query module integration', () => {
       .set('Authorization', `Bearer ${managerLogin.token}`)
       .send({ resolve_note: 'Duplicate close' });
     expectEnvelope(closeAgainRes, 400);
+  });
+
+  it('INV-009: manager list is limited to assigned shops', async () => {
+    await User.findByIdAndUpdate(fixtures.users.managerUser._id, {
+      assigned_shop_ids: [fixtures.shops.mainShop._id],
+      shop_id: fixtures.shops.mainShop._id,
+    });
+
+    const managerLogin = await login('manager@org.com', 'Manager@1234');
+    const res = await request(app)
+      .get('/api/inventory/items')
+      .set('Authorization', `Bearer ${managerLogin.token}`);
+
+    expectEnvelope(res, 200);
+    expect(res.body.data.count).toBe(1);
+    expect(res.body.data.items[0].shop_id._id).toBe(fixtures.shops.mainShop._id.toString());
+  });
+
+  it('INV-010: manager cannot read or create items outside assigned shops', async () => {
+    await User.findByIdAndUpdate(fixtures.users.managerUser._id, {
+      assigned_shop_ids: [fixtures.shops.mainShop._id],
+      shop_id: fixtures.shops.mainShop._id,
+    });
+
+    const managerLogin = await login('manager@org.com', 'Manager@1234');
+    const eastItem = fixtures.inventoryItems[1];
+
+    const readRes = await request(app)
+      .get(`/api/inventory/items/${eastItem._id}`)
+      .set('Authorization', `Bearer ${managerLogin.token}`);
+    expectEnvelope(readRes, 404);
+
+    const createRes = await request(app)
+      .post('/api/inventory/items')
+      .set('Authorization', `Bearer ${managerLogin.token}`)
+      .send({
+        shop_id: fixtures.shops.eastShop._id.toString(),
+        item_name: 'Unauthorized Scanner',
+        status: 'Good',
+      });
+    expectEnvelope(createRes, 403);
+  });
+
+  it('QRY-008: manager cannot open or close queries outside assigned shops', async () => {
+    await User.findByIdAndUpdate(fixtures.users.managerUser._id, {
+      assigned_shop_ids: [fixtures.shops.mainShop._id],
+      shop_id: fixtures.shops.mainShop._id,
+    });
+
+    const managerLogin = await login('manager@org.com', 'Manager@1234');
+    const eastItem = fixtures.inventoryItems[1];
+
+    const openBlocked = await request(app)
+      .post('/api/inventory/queries')
+      .set('Authorization', `Bearer ${managerLogin.token}`)
+      .send({ item_id: eastItem._id.toString(), issue_note: 'Out of scope item' });
+    expectEnvelope(openBlocked, 403);
+
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+    const adminOpen = await request(app)
+      .post('/api/inventory/queries')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .send({ item_id: eastItem._id.toString(), issue_note: 'Admin opened east query' });
+    expectEnvelope(adminOpen, 201);
+
+    const queryId = adminOpen.body.data.query._id;
+    const closeBlocked = await request(app)
+      .put(`/api/inventory/queries/${queryId}/close`)
+      .set('Authorization', `Bearer ${managerLogin.token}`)
+      .send({ resolve_note: 'Manager out of scope close attempt' });
+    expectEnvelope(closeBlocked, 403);
+
+    const queryStillOpen = await InventoryQuery.findById(queryId);
+    expect(queryStillOpen.status).toBe('Open');
   });
 });
 

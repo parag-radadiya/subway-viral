@@ -2,6 +2,7 @@ const Rota = require('../models/Rota');
 const AppError = require('../utils/AppError');
 const asyncHandler = require('../utils/asyncHandler');
 const { sendSuccess } = require('../utils/response');
+const { buildShopScope, isShopAllowed } = require('../middleware/shopScopeMiddleware');
 
 function buildDates(weekStart, days) {
   const base = new Date(weekStart);
@@ -27,10 +28,84 @@ function weekBounds(weekStart) {
 
 const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
+function buildRotaReadScope(user) {
+  const permissions = user?.role_id?.permissions || {};
+  if (permissions.can_manage_shops || permissions.can_manage_roles) {
+    return { mode: 'all', shopScope: { all: true, ids: [] } };
+  }
+
+  if (permissions.can_view_all_staff || permissions.can_manage_inventory || permissions.can_manual_punch) {
+    return { mode: 'shops', shopScope: buildShopScope(user) };
+  }
+
+  return { mode: 'self', shopScope: { all: false, ids: [] } };
+}
+
+function normalizeId(value) {
+  if (!value) return null;
+  if (typeof value === 'string') return value;
+  if (value._id) return value._id.toString();
+  return value.toString();
+}
+
+function applyScopeFilter(filter, req, scope) {
+  if (scope.mode === 'self') {
+    filter.user_id = req.user._id;
+    return;
+  }
+
+  if (scope.mode === 'shops') {
+    if (!scope.shopScope.all && scope.shopScope.ids.length === 0) {
+      filter.shop_id = { $in: [] };
+      return;
+    }
+    if (!scope.shopScope.all) {
+      filter.shop_id = { $in: scope.shopScope.ids };
+    }
+  }
+}
+
+function buildRotaManageScope(user) {
+  const permissions = user?.role_id?.permissions || {};
+  if (permissions.can_manage_shops || permissions.can_manage_roles) {
+    return { mode: 'all', shopScope: { all: true, ids: [] } };
+  }
+  if (permissions.can_manage_rotas) {
+    return { mode: 'shops', shopScope: buildShopScope(user) };
+  }
+  return { mode: 'none', shopScope: { all: false, ids: [] } };
+}
+
+function applyManageScopeFilter(filter, scope) {
+  if (scope.mode === 'all') return;
+  if (!scope.shopScope.all && scope.shopScope.ids.length === 0) {
+    filter.shop_id = { $in: [] };
+    return;
+  }
+  if (!scope.shopScope.all) {
+    filter.shop_id = { $in: scope.shopScope.ids };
+  }
+}
+
+function assertManageShopAllowed(scope, shopId) {
+  if (scope.mode === 'all') return;
+  if (!isShopAllowed(scope.shopScope, shopId)) {
+    throw new AppError('Forbidden: shop is outside your assigned scope', 403);
+  }
+}
+
 const getRotas = asyncHandler(async (req, res) => {
+  const scope = buildRotaReadScope(req.user);
   const filter = {};
-  if (req.query.shop_id) filter.shop_id = req.query.shop_id;
-  if (req.query.user_id) filter.user_id = req.query.user_id;
+  applyScopeFilter(filter, req, scope);
+
+  if (req.query.shop_id) {
+    if (scope.mode === 'shops' && !scope.shopScope.all && !isShopAllowed(scope.shopScope, req.query.shop_id)) {
+      return sendSuccess(res, 'Rota list fetched successfully', { count: 0, rotas: [] });
+    }
+    filter.shop_id = req.query.shop_id;
+  }
+  if (req.query.user_id && scope.mode !== 'self') filter.user_id = req.query.user_id;
   if (req.query.date) filter.shift_date = new Date(req.query.date);
 
   const rotas = await Rota.find(filter)
@@ -45,7 +120,11 @@ const getRotas = asyncHandler(async (req, res) => {
 });
 
 const getRota = asyncHandler(async (req, res) => {
-  const rota = await Rota.findById(req.params.id)
+  const scope = buildRotaReadScope(req.user);
+  const filter = { _id: req.params.id };
+  applyScopeFilter(filter, req, scope);
+
+  const rota = await Rota.findOne(filter)
     .populate('user_id', 'name email')
     .populate('shop_id', 'name');
 
@@ -54,6 +133,9 @@ const getRota = asyncHandler(async (req, res) => {
 });
 
 const createRota = asyncHandler(async (req, res) => {
+  const scope = buildRotaManageScope(req.user);
+  assertManageShopAllowed(scope, req.body.shop_id);
+
   try {
     const rota = await Rota.create(req.body);
     const populated = await rota.populate([
@@ -70,6 +152,12 @@ const createRota = asyncHandler(async (req, res) => {
 });
 
 const updateRota = asyncHandler(async (req, res) => {
+  const scope = buildRotaManageScope(req.user);
+  const existing = await Rota.findById(req.params.id);
+  if (!existing) throw new AppError('Rota not found', 404);
+  assertManageShopAllowed(scope, existing.shop_id);
+  if (req.body.shop_id) assertManageShopAllowed(scope, req.body.shop_id);
+
   try {
     const rota = await Rota.findByIdAndUpdate(req.params.id, req.body, {
       new: true,
@@ -89,6 +177,11 @@ const updateRota = asyncHandler(async (req, res) => {
 });
 
 const deleteRota = asyncHandler(async (req, res) => {
+  const scope = buildRotaManageScope(req.user);
+  const existing = await Rota.findById(req.params.id);
+  if (!existing) throw new AppError('Rota not found', 404);
+  assertManageShopAllowed(scope, existing.shop_id);
+
   const rota = await Rota.findByIdAndDelete(req.params.id);
   if (!rota) throw new AppError('Rota not found', 404);
   return sendSuccess(res, 'Rota deleted', { rota });
@@ -104,12 +197,16 @@ const bulkCreate = asyncHandler(async (req, res) => {
     throw new AppError('days values must be 0 (Mon) - 6 (Sun)', 400);
   }
 
+  const scope = buildRotaManageScope(req.user);
+  assertManageShopAllowed(scope, shop_id);
+
   const dates = buildDates(week_start, days);
   const { start: weekStart, end: weekEnd } = weekBounds(week_start);
   const userIds = [...new Set(assignments.map((a) => a.user_id))];
 
   if (replace_existing) {
     await Rota.deleteMany({
+      shop_id,
       user_id: { $in: userIds },
       shift_date: { $gte: weekStart, $lte: weekEnd },
     });
@@ -171,9 +268,27 @@ const getWeekView = asyncHandler(async (req, res) => {
     throw new AppError('week_start is required (YYYY-MM-DD)', 400);
   }
 
+  const scope = buildRotaReadScope(req.user);
   const { start, end } = weekBounds(week_start);
   const filter = { shift_date: { $gte: start, $lte: end } };
-  if (shop_id) filter.shop_id = shop_id;
+  applyScopeFilter(filter, req, scope);
+
+  if (shop_id) {
+    if (scope.mode === 'shops' && !scope.shopScope.all && !isShopAllowed(scope.shopScope, shop_id)) {
+      return sendSuccess(res, 'Weekly rota view fetched successfully', {
+        week_start: start,
+        week_end: end,
+        shop_id,
+        days: DAY_NAMES.reduce((acc, day, i) => {
+          const d = buildDates(week_start, [i])[0];
+          const label = `${day} ${d.getUTCDate()} ${d.toLocaleString('en-GB', { month: 'short', timeZone: 'UTC' })}`;
+          acc[label] = [];
+          return acc;
+        }, {}),
+      });
+    }
+    filter.shop_id = shop_id;
+  }
 
   const rotas = await Rota.find(filter)
     .populate('user_id', 'name email phone_num')
@@ -209,9 +324,14 @@ const clearWeek = asyncHandler(async (req, res) => {
     throw new AppError('week_start is required', 400);
   }
 
+  const scope = buildRotaManageScope(req.user);
   const { start, end } = weekBounds(week_start);
   const filter = { shift_date: { $gte: start, $lte: end } };
-  if (shop_id) filter.shop_id = shop_id;
+  applyManageScopeFilter(filter, scope);
+  if (shop_id) {
+    assertManageShopAllowed(scope, shop_id);
+    filter.shop_id = shop_id;
+  }
 
   const { deletedCount } = await Rota.deleteMany(filter);
   return sendSuccess(res, `Cleared ${deletedCount} rota entries for the week`, {
@@ -226,10 +346,26 @@ const getDashboard = asyncHandler(async (req, res) => {
     throw new AppError('week_start is required', 400);
   }
 
+  const scope = buildRotaReadScope(req.user);
   const { start, end } = weekBounds(week_start);
   const filter = { shift_date: { $gte: start, $lte: end } };
-  if (shop_id) filter.shop_id = shop_id;
-  if (user_id) filter.user_id = user_id;
+  applyScopeFilter(filter, req, scope);
+
+  if (shop_id) {
+    if (scope.mode === 'shops' && !scope.shopScope.all && !isShopAllowed(scope.shopScope, shop_id)) {
+      return sendSuccess(res, 'Rota dashboard fetched successfully', {
+        week_start: start,
+        week_end: end,
+        total_shifts: 0,
+        by_shop: [],
+        by_employee: [],
+      });
+    }
+    filter.shop_id = shop_id;
+  }
+  if (user_id && scope.mode !== 'self') {
+    filter.user_id = normalizeId(user_id);
+  }
 
   const rotas = await Rota.find(filter)
     .populate('user_id', 'name email')
