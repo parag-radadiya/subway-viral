@@ -7,6 +7,7 @@ const {
   updateUser,
   deleteUser,
   updatePassword,
+  updateOwnDevice,
   getAssignedShopsStaffSummary,
 } = require('../controllers/userController');
 const { protect } = require('../middleware/authMiddleware');
@@ -38,6 +39,29 @@ const { requirePermission } = require('../middleware/permMiddleware');
  *         description: Current password incorrect
  */
 router.put('/me/password', protect, updatePassword);
+
+/**
+ * @swagger
+ * /api/users/me/device:
+ *   put:
+ *     summary: Register or update your own device ID
+ *     tags: [Users]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [device_id]
+ *             properties:
+ *               device_id:
+ *                 type: string
+ *                 example: staff-device-001
+ *     responses:
+ *       200:
+ *         description: Device registered successfully
+ */
+router.put('/me/device', protect, updateOwnDevice);
 
 /**
  * @swagger

@@ -411,6 +411,26 @@ describe('Rota module integration', () => {
     expect(mainWeekCount).toBe(0);
     expect(remoteWeekCount).toBe(1);
   });
+
+  it('ROTA-020: manager can create rota using merged shift_start/shift_end datetime keys', async () => {
+    const managerLogin = await login('manager@org.com', 'Manager@1234');
+
+    const res = await request(app)
+      .post('/api/rotas')
+      .set('Authorization', `Bearer ${managerLogin.token}`)
+      .send({
+        user_id: fixtures.users.staffUser._id.toString(),
+        shop_id: fixtures.shops.mainShop._id.toString(),
+        shift_start: '2026-03-28T09:00:00.000Z',
+        shift_end: '2026-03-28T17:00:00.000Z',
+      });
+
+    expectEnvelope(res, 201);
+    expect(res.body.data.rota.shift_start).toBeTruthy();
+    expect(res.body.data.rota.shift_end).toBeTruthy();
+    expect(res.body.data.rota.start_time).toBe('09:00');
+    expect(res.body.data.rota.end_time).toBe('17:00');
+  });
 });
 
 

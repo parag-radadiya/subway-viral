@@ -26,7 +26,7 @@ const { requirePermission } = require('../middleware/permMiddleware');
  *       Assigns a list of employees to a shop for selected days within a given ISO week.
  *       - `days`: 0 = Monday, 1 = Tuesday … 6 = Sunday
  *       - `assignments`: list of employees + their shift times — applied to **every selected day**
- *       - Duplicate detection: same user + date + start_time is rejected (split shifts are allowed)
+ *       - Duplicate detection: same user + shift_start is rejected (split shifts are allowed)
  *       - `replace_existing: true` wipes those users' full week before re-inserting (use for re-publishing)
  *     requestBody:
  *       required: true
@@ -189,7 +189,7 @@ router.get('/dashboard', protect, requirePermission('can_view_all_staff'), getDa
  *       201:
  *         description: Created
  *       409:
- *         description: Duplicate user/date/start_time
+ *         description: Duplicate user/shift_start
  *
  * /api/rotas/{id}:
  *   get:

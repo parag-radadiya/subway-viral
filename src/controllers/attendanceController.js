@@ -4,6 +4,18 @@ const User = require('../models/User');
 const AppError = require('../utils/AppError');
 const asyncHandler = require('../utils/asyncHandler');
 const { sendSuccess } = require('../utils/response');
+const { buildShopScope, isShopAllowed } = require('../middleware/shopScopeMiddleware');
+
+const buildAttendanceReadScope = (user) => {
+  const permissions = user?.role_id?.permissions || {};
+  if (permissions.can_manage_shops || permissions.can_manage_roles) {
+    return { mode: 'all', shopScope: { all: true, ids: [] } };
+  }
+  if (permissions.can_view_all_staff || permissions.can_manage_inventory || permissions.can_manual_punch) {
+    return { mode: 'shops', shopScope: buildShopScope(user) };
+  }
+  return { mode: 'self', shopScope: { all: false, ids: [] } };
+};
 
 // ─────────────────────────────────────────────
 // STEP 1: Verify GPS location → return a short-lived location_token
@@ -51,6 +63,9 @@ const punchIn = asyncHandler(async (req, res) => {
   }
 
     // 4. Device ID check
+  if (!req.user.device_id) {
+    throw new AppError('No device registered. Please register device after login.', 403);
+  }
   if (!deviceId || deviceId !== req.user.device_id) {
     throw new AppError('Device not recognised. Registered device ID mismatch.', 403);
   }
@@ -140,9 +155,33 @@ const manualPunchIn = asyncHandler(async (req, res) => {
 // GET /api/attendance
 // ─────────────────────────────────────────────
 const getAttendance = asyncHandler(async (req, res) => {
+  const scope = buildAttendanceReadScope(req.user);
   const filter = {};
-  if (req.query.user_id) filter.user_id = req.query.user_id;
-  if (req.query.shop_id) filter.shop_id = req.query.shop_id;
+
+  if (scope.mode === 'self') {
+    filter.user_id = req.user._id;
+  } else if (scope.mode === 'shops') {
+    if (!scope.shopScope.all && scope.shopScope.ids.length === 0) {
+      return sendSuccess(res, 'Attendance records fetched successfully', {
+        count: 0,
+        records: [],
+      });
+    }
+    if (!scope.shopScope.all) {
+      filter.shop_id = { $in: scope.shopScope.ids };
+    }
+  }
+
+  if (req.query.user_id && scope.mode !== 'self') filter.user_id = req.query.user_id;
+  if (req.query.shop_id) {
+    if (scope.mode === 'shops' && !scope.shopScope.all && !isShopAllowed(scope.shopScope, req.query.shop_id)) {
+      return sendSuccess(res, 'Attendance records fetched successfully', {
+        count: 0,
+        records: [],
+      });
+    }
+    filter.shop_id = req.query.shop_id;
+  }
 
   const records = await Attendance.find(filter)
     .populate('user_id', 'name email')

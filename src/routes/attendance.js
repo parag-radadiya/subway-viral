@@ -64,6 +64,7 @@ router.post('/verify-location', protect, validateGeofence, verifyLocation);
  *       Finalizes the punch-in process.
  *       Requires:
  *       1. `x-device-id` header matching the user's registered device.
+ *          If no device is registered yet, call `PUT /api/users/me/device` after login first.
  *       2. `location_token` from previous step.
  *       3. `biometric_verified: true` flag from frontend.
  *     parameters:
@@ -188,6 +189,6 @@ router.put('/:id/punch-out', protect, punchOut);
  *                 success: { type: boolean }
  *                 data: { type: array, items: { $ref: '#/components/schemas/Attendance' } }
  */
-router.get('/', protect, requirePermission('can_view_all_staff'), getAttendance);
+router.get('/', protect, getAttendance);
 
 module.exports = router;

@@ -34,6 +34,7 @@ describe('Auth and onboarding integration', () => {
     expect(res.body.data.token).toBeTruthy();
     expect(res.body.data.user.email).toBe('root@org.com');
     expect(res.body.data.user.active_shop_id).toBeTruthy();
+    expect(res.body.data.needs_device_registration).toBe(false);
     expect(res.body.data.user.role.permissions.can_manage_roles).toBe(true);
   });
 

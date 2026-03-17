@@ -1,6 +1,7 @@
 const request = require('supertest');
 const app = require('../../src/app');
 const Attendance = require('../../src/models/Attendance');
+const User = require('../../src/models/User');
 const { expectEnvelope } = require('../helpers/assertions');
 const { login } = require('../helpers/auth');
 const { seedTestData } = require('../helpers/seedTestData');
@@ -169,6 +170,32 @@ describe('Attendance module integration', () => {
     expectEnvelope(res, 403);
   });
 
+  it('ATT-018: blocks punch-in when user has not registered device yet', async () => {
+    await User.findByIdAndUpdate(fixtures.users.staffUser._id, { device_id: null });
+    const staffLogin = await login('staff@org.com', 'Staff@1234');
+
+    const verifyRes = await request(app)
+      .post('/api/attendance/verify-location')
+      .set('Authorization', `Bearer ${staffLogin.token}`)
+      .send({
+        shop_id: fixtures.shops.mainShop._id.toString(),
+        latitude: 51.5074,
+        longitude: -0.1278,
+      });
+
+    const res = await request(app)
+      .post('/api/attendance/punch-in')
+      .set('Authorization', `Bearer ${staffLogin.token}`)
+      .set('x-device-id', 'any-device')
+      .send({
+        shop_id: fixtures.shops.mainShop._id.toString(),
+        location_token: verifyRes.body.data.location_token,
+        biometric_verified: true,
+      });
+
+    expectEnvelope(res, 403);
+  });
+
   it('ATT-012: blocks punch-out for another users attendance record', async () => {
     const staffLogin = await login('staff@org.com', 'Staff@1234');
     const managerLogin = await login('manager@org.com', 'Manager@1234');
@@ -279,9 +306,25 @@ describe('Attendance module integration', () => {
     expectEnvelope(res, 404);
   });
 
-  it('ATT-016 and ATT-017: attendance list is allowed for manager and forbidden for staff', async () => {
+  it('ATT-016 and ATT-017: attendance list is allowed for manager and self-scoped for staff', async () => {
     const managerLogin = await login('manager@org.com', 'Manager@1234');
     const staffLogin = await login('staff@org.com', 'Staff@1234');
+
+    await Attendance.create({
+      user_id: fixtures.users.staffUser._id,
+      shop_id: fixtures.shops.mainShop._id,
+      punch_in: new Date(),
+      is_manual: false,
+      punch_method: 'GPS+Biometric',
+    });
+
+    await Attendance.create({
+      user_id: fixtures.users.managerUser._id,
+      shop_id: fixtures.shops.mainShop._id,
+      punch_in: new Date(),
+      is_manual: false,
+      punch_method: 'GPS+Biometric',
+    });
 
     const allowedRes = await request(app)
       .get('/api/attendance')
@@ -289,10 +332,15 @@ describe('Attendance module integration', () => {
     expectEnvelope(allowedRes, 200);
     expect(Array.isArray(allowedRes.body.data.records)).toBe(true);
 
-    const forbiddenRes = await request(app)
-      .get('/api/attendance')
+    const staffRes = await request(app)
+      .get(`/api/attendance?user_id=${fixtures.users.managerUser._id}`)
       .set('Authorization', `Bearer ${staffLogin.token}`);
-    expectEnvelope(forbiddenRes, 403);
+
+    expectEnvelope(staffRes, 200);
+    expect(Array.isArray(staffRes.body.data.records)).toBe(true);
+    staffRes.body.data.records.forEach((record) => {
+      expect(record.user_id._id).toBe(fixtures.users.staffUser._id.toString());
+    });
   });
 
   it('ATT-013 and ATT-014: allows manual punch with permission and blocks without it', async () => {

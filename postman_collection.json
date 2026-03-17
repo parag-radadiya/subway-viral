@@ -217,6 +217,100 @@
                             ]
                         }
                     }
+                },
+                {
+                    "name": "Login (Manager)",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [
+                                    "if (pm.response.code === 200) {",
+                                    "  const json = pm.response.json();",
+                                    "  pm.collectionVariables.set('token', json.data.token);",
+                                    "  pm.collectionVariables.set('user_id', json.data.user.id);",
+                                    "  pm.collectionVariables.set('shop_id', json.data.user.shop_id || '');",
+                                    "  pm.collectionVariables.set('active_shop_id', json.data.user.active_shop_id || json.data.user.shop_id || '');",
+                                    "}"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ],
+                    "request": {
+                        "auth": {
+                            "type": "noauth"
+                        },
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"email\": \"manager@org.com\",\n  \"password\": \"Manager@1234\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{base_url}}/api/auth/login",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "auth",
+                                "login"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "Login (Staff)",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [
+                                    "if (pm.response.code === 200) {",
+                                    "  const json = pm.response.json();",
+                                    "  pm.collectionVariables.set('token', json.data.token);",
+                                    "  pm.collectionVariables.set('user_id', json.data.user.id);",
+                                    "  pm.collectionVariables.set('shop_id', json.data.user.shop_id || '');",
+                                    "  pm.collectionVariables.set('active_shop_id', json.data.user.active_shop_id || json.data.user.shop_id || '');",
+                                    "}"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ],
+                    "request": {
+                        "auth": {
+                            "type": "noauth"
+                        },
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"email\": \"staff@org.com\",\n  \"password\": \"Staff@1234\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{base_url}}/api/auth/login",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "auth",
+                                "login"
+                            ]
+                        }
+                    }
                 }
             ]
         },
@@ -640,7 +734,7 @@
                         ],
                         "body": {
                             "mode": "raw",
-                            "raw": "{\n  \"user_id\": \"{{user_id}}\",\n  \"shop_id\": \"{{shop_id}}\",\n  \"shift_date\": \"2026-03-15\",\n  \"start_time\": \"09:00\"\n}"
+                            "raw": "{\n  \"user_id\": \"{{user_id}}\",\n  \"shop_id\": \"{{shop_id}}\",\n  \"shift_start\": \"2026-03-15T09:00:00.000Z\",\n  \"shift_end\": \"2026-03-15T17:00:00.000Z\"\n}"
                         },
                         "url": {
                             "raw": "{{base_url}}/api/rotas",

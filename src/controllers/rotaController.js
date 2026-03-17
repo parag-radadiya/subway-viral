@@ -18,6 +18,44 @@ function buildDates(weekStart, days) {
   });
 }
 
+function combineDateAndTime(dateValue, timeValue) {
+  if (!dateValue || !timeValue) return null;
+  const [h, m] = String(timeValue).split(':').map(Number);
+  if (Number.isNaN(h) || Number.isNaN(m)) return null;
+  const d = new Date(dateValue);
+  d.setUTCHours(h, m, 0, 0);
+  return d;
+}
+
+function normalizeRotaPayload(payload) {
+  const shiftStart = payload.shift_start
+    ? new Date(payload.shift_start)
+    : combineDateAndTime(payload.shift_date, payload.start_time);
+  const shiftEnd = payload.shift_end
+    ? new Date(payload.shift_end)
+    : combineDateAndTime(payload.shift_date, payload.end_time);
+
+  if (!shiftStart || Number.isNaN(shiftStart.getTime())) {
+    throw new AppError('shift_start is required (or provide shift_date + start_time)', 400);
+  }
+  if (!shiftEnd || Number.isNaN(shiftEnd.getTime())) {
+    throw new AppError('shift_end is required (or provide shift_date + end_time)', 400);
+  }
+  if (shiftEnd <= shiftStart) {
+    throw new AppError('shift_end must be after shift_start', 400);
+  }
+
+  const shiftDate = new Date(shiftStart);
+  shiftDate.setUTCHours(0, 0, 0, 0);
+
+  return {
+    ...payload,
+    shift_start: shiftStart,
+    shift_end: shiftEnd,
+    shift_date: shiftDate,
+  };
+}
+
 function weekBounds(weekStart) {
   const dates = buildDates(weekStart, [0, 1, 2, 3, 4, 5, 6]);
   const start = new Date(dates[0]);
@@ -111,7 +149,7 @@ const getRotas = asyncHandler(async (req, res) => {
   const rotas = await Rota.find(filter)
     .populate('user_id', 'name email')
     .populate('shop_id', 'name')
-    .sort({ shift_date: 1, start_time: 1 });
+    .sort({ shift_start: 1 });
 
   return sendSuccess(res, 'Rota list fetched successfully', {
     count: rotas.length,
@@ -135,9 +173,10 @@ const getRota = asyncHandler(async (req, res) => {
 const createRota = asyncHandler(async (req, res) => {
   const scope = buildRotaManageScope(req.user);
   assertManageShopAllowed(scope, req.body.shop_id);
+  const payload = normalizeRotaPayload(req.body);
 
   try {
-    const rota = await Rota.create(req.body);
+    const rota = await Rota.create(payload);
     const populated = await rota.populate([
       { path: 'user_id', select: 'name email' },
       { path: 'shop_id', select: 'name' },
@@ -145,7 +184,7 @@ const createRota = asyncHandler(async (req, res) => {
     return sendSuccess(res, 'Rota created successfully', { rota: populated }, 201);
   } catch (err) {
     if (err.code === 11000) {
-      throw new AppError('A rota entry for this user/date/start_time already exists', 409);
+      throw new AppError('A rota entry for this user/shift_start already exists', 409);
     }
     throw err;
   }
@@ -157,9 +196,10 @@ const updateRota = asyncHandler(async (req, res) => {
   if (!existing) throw new AppError('Rota not found', 404);
   assertManageShopAllowed(scope, existing.shop_id);
   if (req.body.shop_id) assertManageShopAllowed(scope, req.body.shop_id);
+  const mergedPayload = normalizeRotaPayload({ ...existing.toObject(), ...req.body });
 
   try {
-    const rota = await Rota.findByIdAndUpdate(req.params.id, req.body, {
+    const rota = await Rota.findByIdAndUpdate(req.params.id, mergedPayload, {
       new: true,
       runValidators: true,
     })
@@ -170,7 +210,7 @@ const updateRota = asyncHandler(async (req, res) => {
     return sendSuccess(res, 'Rota updated successfully', { rota });
   } catch (err) {
     if (err.code === 11000) {
-      throw new AppError('Conflict: a rota with that user/date/start_time already exists', 409);
+      throw new AppError('Conflict: a rota with that user/shift_start already exists', 409);
     }
     throw err;
   }
@@ -196,6 +236,9 @@ const bulkCreate = asyncHandler(async (req, res) => {
   if (days.some((d) => d < 0 || d > 6)) {
     throw new AppError('days values must be 0 (Mon) - 6 (Sun)', 400);
   }
+  if (assignments.some((a) => !a.end_time)) {
+    throw new AppError('Each assignment requires end_time', 400);
+  }
 
   const scope = buildRotaManageScope(req.user);
   assertManageShopAllowed(scope, shop_id);
@@ -219,6 +262,8 @@ const bulkCreate = asyncHandler(async (req, res) => {
         user_id: assignment.user_id,
         shop_id,
         shift_date: date,
+        shift_start: combineDateAndTime(date, assignment.start_time),
+        shift_end: combineDateAndTime(date, assignment.end_time),
         start_time: assignment.start_time,
         end_time: assignment.end_time || undefined,
         note: assignment.note || undefined,
@@ -293,7 +338,7 @@ const getWeekView = asyncHandler(async (req, res) => {
   const rotas = await Rota.find(filter)
     .populate('user_id', 'name email phone_num')
     .populate('shop_id', 'name')
-    .sort({ shift_date: 1, start_time: 1 });
+    .sort({ shift_start: 1 });
 
   const days = {};
   const allDates = buildDates(week_start, [0, 1, 2, 3, 4, 5, 6]);
@@ -370,7 +415,7 @@ const getDashboard = asyncHandler(async (req, res) => {
   const rotas = await Rota.find(filter)
     .populate('user_id', 'name email')
     .populate('shop_id', 'name')
-    .sort({ shift_date: 1, start_time: 1 });
+    .sort({ shift_start: 1 });
 
   const shopMap = {};
   const allDates = buildDates(week_start, [0, 1, 2, 3, 4, 5, 6]);

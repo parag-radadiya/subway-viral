@@ -109,6 +109,7 @@ const updateUser = asyncHandler(async (req, res) => {
   const {
     name,
     email,
+    password,
     phone_code,
     phone_num,
     role_id,
@@ -130,6 +131,14 @@ const updateUser = asyncHandler(async (req, res) => {
 
   if (name !== undefined) user.name = name;
   if (email !== undefined) user.email = email;
+  if (password !== undefined) {
+    if (typeof password !== 'string' || password.length < 8) {
+      throw new AppError('Password must be at least 8 characters', 400);
+    }
+    // Use password_hash field so User pre-save hook re-hashes securely.
+    user.password_hash = password;
+    user.must_change_password = true;
+  }
   if (phone_code !== undefined) user.phone_code = phone_code;
   if (phone_num !== undefined) user.phone_num = phone_num;
   if (role_id !== undefined) user.role_id = role_id;
@@ -191,6 +200,28 @@ const updatePassword = asyncHandler(async (req, res) => {
   await user.save();
 
   return sendSuccess(res, 'Password updated successfully', {});
+});
+
+// @route  PUT /api/users/me/device
+// @access Self (JWT required)
+const updateOwnDevice = asyncHandler(async (req, res) => {
+  const { device_id } = req.body;
+  if (!device_id || typeof device_id !== 'string' || !device_id.trim()) {
+    throw new AppError('device_id is required', 400);
+  }
+
+  const user = await User.findById(req.user._id);
+  if (!user) throw new AppError('User not found', 404);
+
+  user.device_id = device_id.trim();
+  await user.save();
+
+  return sendSuccess(res, 'Device registered successfully', {
+    user: {
+      _id: user._id,
+      device_id: user.device_id,
+    },
+  });
 });
 
 // @route GET /api/users/assigned-shops/staff-summary
@@ -259,5 +290,6 @@ module.exports = {
   updateUser,
   deleteUser,
   updatePassword,
+  updateOwnDevice,
   getAssignedShopsStaffSummary,
 };

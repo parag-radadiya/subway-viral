@@ -219,6 +219,45 @@ describe('Users module integration', () => {
     const res = await request(app).get('/api/users');
     expectEnvelope(res, 401);
   });
+
+  it('USER-013: user can register own device after login', async () => {
+    await User.findByIdAndUpdate(fixtures.users.staffUser._id, { device_id: null });
+    const staffLogin = await login('staff@org.com', 'Staff@1234');
+
+    const res = await request(app)
+      .put('/api/users/me/device')
+      .set('Authorization', `Bearer ${staffLogin.token}`)
+      .send({ device_id: 'staff-device-new-01' });
+
+    expectEnvelope(res, 200);
+    expect(res.body.data.user.device_id).toBe('staff-device-new-01');
+
+    const stored = await User.findById(fixtures.users.staffUser._id);
+    expect(stored.device_id).toBe('staff-device-new-01');
+  });
+
+  it('USER-014: admin can reset user password via update user', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+
+    const updateRes = await request(app)
+      .put(`/api/users/${fixtures.users.staffUser._id}`)
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .send({ password: 'Staff@5678' });
+
+    expectEnvelope(updateRes, 200);
+    expect(updateRes.body.data.user.must_change_password).toBe(true);
+
+    const oldLoginRes = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'staff@org.com', password: 'Staff@1234' });
+    expectEnvelope(oldLoginRes, 400);
+
+    const newLoginRes = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'staff@org.com', password: 'Staff@5678' });
+    expectEnvelope(newLoginRes, 200);
+    expect(newLoginRes.body.data.must_change_password).toBe(true);
+  });
 });
 
 

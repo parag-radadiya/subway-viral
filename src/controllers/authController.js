@@ -32,6 +32,7 @@ const login = asyncHandler(async (req, res) => {
   return sendSuccess(res, 'Login successful', {
     token: generateToken(user._id),
     must_change_password: user.must_change_password,
+    needs_device_registration: !user.device_id,
     user: {
       id: user._id,
       name: user.name,
