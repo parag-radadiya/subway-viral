@@ -14,8 +14,10 @@ const rotaRoutes = require('./routes/rotas');
 const attendanceRoutes = require('./routes/attendance');
 const inventoryItemRoutes = require('./routes/inventoryItems');
 const inventoryQueryRoutes = require('./routes/inventoryQueries');
+const observabilityRoutes = require('./routes/observability');
 const { sendSuccess } = require('./utils/response');
 const { notFoundHandler, globalErrorHandler } = require('./middleware/errorHandler');
+const { requestAnalytics } = require('./middleware/requestAnalyticsMiddleware');
 
 const app = express();
 
@@ -28,6 +30,7 @@ app.use(requestAnalytics);
 
 // Health check
 app.get('/health', (req, res) => sendSuccess(res, 'Service is healthy', {
+  timestamp: new Date().toISOString(),
 }));
 
 // Swagger UI — http://localhost:5000/api-docs

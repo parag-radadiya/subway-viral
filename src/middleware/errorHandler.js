@@ -1,4 +1,5 @@
 const { sendResponse } = require('../utils/response');
+const { recordErrorLog } = require('../utils/observability');
 const AppError = require('../utils/AppError');
 
 const notFoundHandler = (req, res, next) => {
@@ -43,6 +44,13 @@ const globalErrorHandler = (err, req, res, _next) => {
     req,
     statusCode,
     message,
+    stack: err.stack,
+  });
+
+  return sendResponse(res, statusCode, message, data);
+};
+
+module.exports = {
   notFoundHandler,
   globalErrorHandler,
 };
