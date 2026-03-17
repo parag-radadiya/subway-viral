@@ -17,12 +17,16 @@ const login = asyncHandler(async (req, res) => {
     throw new AppError('Email and password are required', 400);
   }
 
-  const user = await User.findOne({ email, is_active: true })
+  const user = await User.findOne({ email })
     .select('+password_hash')
     .populate('role_id');
 
   if (!user || !(await user.matchPassword(password))) {
-    throw new AppError('Invalid credentials', 401);
+    throw new AppError('Invalid credentials', 400);
+  }
+
+  if (!user.is_active) {
+    throw new AppError('User not found or deactivated', 400);
   }
 
   return sendSuccess(res, 'Login successful', {

@@ -3,6 +3,9 @@ const app = require('../../src/app');
 const { expectEnvelope } = require('../helpers/assertions');
 const { login } = require('../helpers/auth');
 const { seedTestData } = require('../helpers/seedTestData');
+const Rota = require('../../src/models/Rota');
+const Shop = require('../../src/models/Shop');
+const User = require('../../src/models/User');
 const {
   connectSandboxDb,
   clearSandboxDb,
@@ -216,6 +219,197 @@ describe('Rota module integration', () => {
     expectEnvelope(duplicateRes, 201);
     expect(duplicateRes.body.data.skipped).toBeGreaterThan(0);
     expect(Array.isArray(duplicateRes.body.data.conflicts)).toBe(true);
+  });
+
+  it('ROTA-014: staff list is self-scoped even if another user_id is provided', async () => {
+    const managerLogin = await login('manager@org.com', 'Manager@1234');
+    await request(app)
+      .post('/api/rotas')
+      .set('Authorization', `Bearer ${managerLogin.token}`)
+      .send({
+        user_id: fixtures.users.managerUser._id.toString(),
+        shop_id: fixtures.shops.mainShop._id.toString(),
+        shift_date: '2026-03-21',
+        start_time: '12:00',
+        end_time: '18:00',
+      });
+
+    const staffLogin = await login('staff@org.com', 'Staff@1234');
+    const res = await request(app)
+      .get(`/api/rotas?user_id=${fixtures.users.managerUser._id}`)
+      .set('Authorization', `Bearer ${staffLogin.token}`);
+
+    expectEnvelope(res, 200);
+    expect(res.body.data.rotas.length).toBeGreaterThan(0);
+    res.body.data.rotas.forEach((rota) => {
+      expect(rota.user_id._id).toBe(fixtures.users.staffUser._id.toString());
+    });
+  });
+
+  it('ROTA-015: staff cannot fetch another user rota by id', async () => {
+    const managerRota = await Rota.create({
+      user_id: fixtures.users.managerUser._id,
+      shop_id: fixtures.shops.mainShop._id,
+      shift_date: new Date('2026-03-22T00:00:00.000Z'),
+      start_time: '13:00',
+      end_time: '20:00',
+    });
+
+    const staffLogin = await login('staff@org.com', 'Staff@1234');
+    const res = await request(app)
+      .get(`/api/rotas/${managerRota._id}`)
+      .set('Authorization', `Bearer ${staffLogin.token}`);
+
+    expectEnvelope(res, 404);
+  });
+
+  it('ROTA-016: manager reads only assigned-shop rota data', async () => {
+    const remoteShop = await Shop.create({
+      name: 'North Branch',
+      latitude: 52.0,
+      longitude: -0.1,
+      geofence_radius_m: 100,
+    });
+
+    await User.findByIdAndUpdate(fixtures.users.managerUser._id, {
+      assigned_shop_ids: [fixtures.shops.mainShop._id],
+      shop_id: fixtures.shops.mainShop._id,
+    });
+
+    await Rota.create({
+      user_id: fixtures.users.staffUser._id,
+      shop_id: remoteShop._id,
+      shift_date: new Date('2026-03-18T00:00:00.000Z'),
+      start_time: '07:00',
+      end_time: '11:00',
+    });
+
+    const managerLogin = await login('manager@org.com', 'Manager@1234');
+    const listRes = await request(app)
+      .get('/api/rotas')
+      .set('Authorization', `Bearer ${managerLogin.token}`);
+
+    expectEnvelope(listRes, 200);
+    expect(listRes.body.data.rotas.some((rota) => rota.shop_id._id === remoteShop._id.toString())).toBe(false);
+
+    const weekRes = await request(app)
+      .get(`/api/rotas/week?week_start=2026-03-16&shop_id=${remoteShop._id}`)
+      .set('Authorization', `Bearer ${managerLogin.token}`);
+
+    expectEnvelope(weekRes, 200);
+    const dayValues = Object.values(weekRes.body.data.days || {});
+    expect(dayValues.every((entries) => entries.length === 0)).toBe(true);
+  });
+
+  it('ROTA-017: manager cannot create rota in an unassigned shop', async () => {
+    const remoteShop = await Shop.create({
+      name: 'South Branch',
+      latitude: 52.2,
+      longitude: -0.2,
+      geofence_radius_m: 120,
+    });
+
+    await User.findByIdAndUpdate(fixtures.users.managerUser._id, {
+      assigned_shop_ids: [fixtures.shops.mainShop._id],
+      shop_id: fixtures.shops.mainShop._id,
+    });
+
+    const managerLogin = await login('manager@org.com', 'Manager@1234');
+    const res = await request(app)
+      .post('/api/rotas')
+      .set('Authorization', `Bearer ${managerLogin.token}`)
+      .send({
+        user_id: fixtures.users.staffUser._id.toString(),
+        shop_id: remoteShop._id.toString(),
+        shift_date: '2026-03-25',
+        start_time: '10:00',
+        end_time: '16:00',
+      });
+
+    expectEnvelope(res, 403);
+  });
+
+  it('ROTA-018: manager cannot update or delete rota in an unassigned shop', async () => {
+    const remoteShop = await Shop.create({
+      name: 'West Branch',
+      latitude: 52.4,
+      longitude: -0.4,
+      geofence_radius_m: 120,
+    });
+
+    await User.findByIdAndUpdate(fixtures.users.managerUser._id, {
+      assigned_shop_ids: [fixtures.shops.mainShop._id],
+      shop_id: fixtures.shops.mainShop._id,
+    });
+
+    const remoteRota = await Rota.create({
+      user_id: fixtures.users.staffUser._id,
+      shop_id: remoteShop._id,
+      shift_date: new Date('2026-03-26T00:00:00.000Z'),
+      start_time: '09:00',
+      end_time: '17:00',
+    });
+
+    const managerLogin = await login('manager@org.com', 'Manager@1234');
+
+    const updateRes = await request(app)
+      .put(`/api/rotas/${remoteRota._id}`)
+      .set('Authorization', `Bearer ${managerLogin.token}`)
+      .send({ end_time: '18:00' });
+    expectEnvelope(updateRes, 403);
+
+    const deleteRes = await request(app)
+      .delete(`/api/rotas/${remoteRota._id}`)
+      .set('Authorization', `Bearer ${managerLogin.token}`);
+    expectEnvelope(deleteRes, 403);
+  });
+
+  it('ROTA-019: clear week without shop_id only clears manager assigned shops', async () => {
+    const remoteShop = await Shop.create({
+      name: 'Central Branch',
+      latitude: 52.5,
+      longitude: -0.5,
+      geofence_radius_m: 120,
+    });
+
+    await User.findByIdAndUpdate(fixtures.users.managerUser._id, {
+      assigned_shop_ids: [fixtures.shops.mainShop._id],
+      shop_id: fixtures.shops.mainShop._id,
+    });
+
+    await Rota.create({
+      user_id: fixtures.users.staffUser._id,
+      shop_id: remoteShop._id,
+      shift_date: new Date('2026-03-16T00:00:00.000Z'),
+      start_time: '08:00',
+      end_time: '12:00',
+    });
+
+    const managerLogin = await login('manager@org.com', 'Manager@1234');
+    const clearRes = await request(app)
+      .delete('/api/rotas/week?week_start=2026-03-16')
+      .set('Authorization', `Bearer ${managerLogin.token}`);
+
+    expectEnvelope(clearRes, 200);
+
+    const mainWeekCount = await Rota.countDocuments({
+      shop_id: fixtures.shops.mainShop._id,
+      shift_date: {
+        $gte: new Date('2026-03-16T00:00:00.000Z'),
+        $lte: new Date('2026-03-22T23:59:59.999Z'),
+      },
+    });
+
+    const remoteWeekCount = await Rota.countDocuments({
+      shop_id: remoteShop._id,
+      shift_date: {
+        $gte: new Date('2026-03-16T00:00:00.000Z'),
+        $lte: new Date('2026-03-22T23:59:59.999Z'),
+      },
+    });
+
+    expect(mainWeekCount).toBe(0);
+    expect(remoteWeekCount).toBe(1);
   });
 });
 
