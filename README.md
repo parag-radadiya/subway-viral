@@ -22,6 +22,13 @@ A robust Node.js and MongoDB backend designed for efficient employee scheduling,
   2. Biometric confirmation (frontend-driven) and Device ID verification.
 - **Manual Punch-In Accountability**: Sub-Managers can manually clock in staff (exception flow), with full audit logs of who authorized the punch-in.
 
+### 📈 System Observability (Root)
+- **Request Analytics in MongoDB**: Route/method/status counts and latency metrics are aggregated and stored for dashboarding.
+- **Central Error Logging**: API errors are persisted with status, route, user, and timestamp for troubleshooting.
+- **Root Dashboard APIs**:
+  - `GET /api/observability/overview?days=7`
+  - `GET /api/observability/errors?days=7&limit=50`
+
 ### 📦 Inventory Management
 - **Item Tracking**: Manage stock levels and item status (Good, Damaged, In Repair) across multiple shops.
 - **Issue Ticketing (Queries)**: Streamlined reporting of damaged items.

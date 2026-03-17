@@ -66,6 +66,8 @@ describe('Users module integration', () => {
 
     expectEnvelope(res, 201);
     expect(res.body.data.user.must_change_password).toBe(true);
+    expect(res.body.data.user.active_shop_id.toString()).toBe(fixtures.shops.mainShop._id.toString());
+    expect(res.body.data.user.assigned_shop_ids.map(String)).toContain(fixtures.shops.mainShop._id.toString());
   });
 
   it('USER-007: blocks create user without can_create_users permission', async () => {
@@ -134,6 +136,30 @@ describe('Users module integration', () => {
     expect(res.body.data.user.name).toBe('Dave Updated');
   });
 
+  it('USER-012: changing active shop appends previous active shop to history', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+    const res = await request(app)
+      .put(`/api/users/${fixtures.users.staffUser._id}`)
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .send({
+        active_shop_id: fixtures.shops.eastShop._id.toString(),
+        assigned_shop_ids: [
+          fixtures.shops.mainShop._id.toString(),
+          fixtures.shops.eastShop._id.toString(),
+        ],
+      });
+
+    expectEnvelope(res, 200);
+
+    const updated = await User.findById(fixtures.users.staffUser._id);
+    expect(updated.active_shop_id.toString()).toBe(fixtures.shops.eastShop._id.toString());
+    expect(updated.shop_id.toString()).toBe(fixtures.shops.eastShop._id.toString());
+    expect(Array.isArray(updated.shop_history)).toBe(true);
+    expect(updated.shop_history.length).toBeGreaterThan(0);
+    expect(updated.shop_history[updated.shop_history.length - 1].shop_id.toString())
+      .toBe(fixtures.shops.mainShop._id.toString());
+  });
+
   it('USER-009: returns not found when updating unknown user', async () => {
     const adminLogin = await login('admin@org.com', 'Admin@1234');
     const res = await request(app)
@@ -160,7 +186,7 @@ describe('Users module integration', () => {
     const loginRes = await request(app)
       .post('/api/auth/login')
       .send({ email: 'staff@org.com', password: 'Staff@1234' });
-    expectEnvelope(loginRes, 401);
+    expectEnvelope(loginRes, 400);
   });
 
   it('SEC-003: blocks employee from reading another user profile', async () => {

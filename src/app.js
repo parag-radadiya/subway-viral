@@ -24,10 +24,10 @@ const app = express();
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors());
 app.use(express.json());
+app.use(requestAnalytics);
 
 // Health check
 app.get('/health', (req, res) => sendSuccess(res, 'Service is healthy', {
-  timestamp: new Date().toISOString(),
 }));
 
 // Swagger UI — http://localhost:5000/api-docs
@@ -47,6 +47,7 @@ app.use('/api/rotas', rotaRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/inventory/items', inventoryItemRoutes);
 app.use('/api/inventory/queries', inventoryQueryRoutes);
+app.use('/api/observability', observabilityRoutes);
 
 // 404 + global error handlers
 app.use(notFoundHandler);

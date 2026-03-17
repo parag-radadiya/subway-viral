@@ -39,10 +39,10 @@ const globalErrorHandler = (err, req, res, _next) => {
     }
   }
 
-  return sendResponse(res, statusCode, message, data);
-};
-
-module.exports = {
+  recordErrorLog({
+    req,
+    statusCode,
+    message,
   notFoundHandler,
   globalErrorHandler,
 };

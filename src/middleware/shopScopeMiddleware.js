@@ -11,7 +11,7 @@ const resolveAllowedShopIds = (user) => {
   const assigned = Array.isArray(user?.assigned_shop_ids)
     ? user.assigned_shop_ids.map(toId).filter(Boolean)
     : [];
-  const primary = toId(user?.shop_id);
+  const primary = toId(user?.active_shop_id) || toId(user?.shop_id);
   return unique(primary ? [...assigned, primary] : assigned);
 };
 
