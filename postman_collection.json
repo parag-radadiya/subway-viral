@@ -2,7 +2,7 @@
     "info": {
         "name": "Staff & Inventory Management API",
         "_postman_id": "staff-inventory-api-v1",
-        "description": "Complete API collection for the Staff & Inventory Management backend.\n\n**Setup:**\n1. Set the `base_url` variable to `http://localhost:5000`\n2. Run `POST /api/auth/login` with root credentials — the `token` variable is auto-set\n3. All subsequent requests use the token automatically\n\n**Seed credentials:**\n- Root: root@org.com / Root@1234\n- Admin: admin@org.com / Admin@1234\n- Manager: manager@org.com / Manager@1234\n- Sub-Manager: submanager@org.com / SubMgr@1234\n- Staff: staff@org.com / Staff@1234",
+        "description": "Complete API collection for the Staff & Inventory Management backend.\n\n**Setup:**\n1. Set the `base_url` variable to `http://localhost:5000`\n2. Run `POST /api/auth/login` with root/admin credentials — `token`, `user_id`, `shop_id`, and `active_shop_id` variables are auto-set\n3. All subsequent requests use the token automatically\n\n**Seed credentials:**\n- Root: root@org.com / Root@1234\n- Admin: admin@org.com / Admin@1234\n- Manager: manager@org.com / Manager@1234\n- Sub-Manager: submanager@org.com / SubMgr@1234\n- Staff: staff@org.com / Staff@1234",
         "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
     },
     "variable": [
@@ -23,6 +23,11 @@
         },
         {
             "key": "shop_id",
+            "value": "",
+            "type": "string"
+        },
+        {
+            "key": "active_shop_id",
             "value": "",
             "type": "string"
         },
@@ -81,6 +86,9 @@
                                     "if (pm.response.code === 200) {",
                                     "  const json = pm.response.json();",
                                     "  pm.collectionVariables.set('token', json.data.token);",
+                                    "  pm.collectionVariables.set('user_id', json.data.user.id);",
+                                    "  pm.collectionVariables.set('shop_id', json.data.user.shop_id || '');",
+                                    "  pm.collectionVariables.set('active_shop_id', json.data.user.active_shop_id || json.data.user.shop_id || '');",
                                     "  console.log('✅ Token saved');",
                                     "}"
                                 ],
@@ -124,7 +132,11 @@
                             "script": {
                                 "exec": [
                                     "if (pm.response.code === 200) {",
-                                    "  pm.collectionVariables.set('token', pm.response.json().data.token);",
+                                    "  const json = pm.response.json();",
+                                    "  pm.collectionVariables.set('token', json.data.token);",
+                                    "  pm.collectionVariables.set('user_id', json.data.user.id);",
+                                    "  pm.collectionVariables.set('shop_id', json.data.user.shop_id || '');",
+                                    "  pm.collectionVariables.set('active_shop_id', json.data.user.active_shop_id || json.data.user.shop_id || '');",
                                     "}"
                                 ],
                                 "type": "text/javascript"
@@ -167,7 +179,11 @@
                             "script": {
                                 "exec": [
                                     "if (pm.response.code === 200) {",
-                                    "  pm.collectionVariables.set('token', pm.response.json().data.token);",
+                                    "  const json = pm.response.json();",
+                                    "  pm.collectionVariables.set('token', json.data.token);",
+                                    "  pm.collectionVariables.set('user_id', json.data.user.id);",
+                                    "  pm.collectionVariables.set('shop_id', json.data.user.shop_id || '');",
+                                    "  pm.collectionVariables.set('active_shop_id', json.data.user.active_shop_id || json.data.user.shop_id || '');",
                                     "}"
                                 ],
                                 "type": "text/javascript"
@@ -248,7 +264,7 @@
                         ],
                         "body": {
                             "mode": "raw",
-                            "raw": "{\n  \"name\": \"Jane New\",\n  \"email\": \"jane@org.com\",\n  \"password\": \"Temp@1234\",\n  \"phone_code\": \"+44\",\n  \"phone_num\": \"7999999999\",\n  \"role_id\": \"{{role_id}}\",\n  \"device_id\": \"jane-device-001\",\n  \"shop_id\": \"{{shop_id}}\"\n}"
+                            "raw": "{\n  \"name\": \"Jane New\",\n  \"email\": \"jane@org.com\",\n  \"password\": \"Temp@1234\",\n  \"phone_code\": \"+44\",\n  \"phone_num\": \"7999999999\",\n  \"role_id\": \"{{role_id}}\",\n  \"device_id\": \"jane-device-001\",\n  \"active_shop_id\": \"{{shop_id}}\",\n  \"assigned_shop_ids\": [\n    \"{{shop_id}}\"\n  ]\n}"
                         },
                         "url": {
                             "raw": "{{base_url}}/api/users",
@@ -291,7 +307,7 @@
                         ],
                         "body": {
                             "mode": "raw",
-                            "raw": "{\n  \"name\": \"Jane Updated\",\n  \"phone_num\": \"7888888888\"\n}"
+                            "raw": "{\n  \"name\": \"Jane Updated\",\n  \"phone_num\": \"7888888888\",\n  \"active_shop_id\": \"{{active_shop_id}}\",\n  \"assigned_shop_ids\": [\n    \"{{shop_id}}\",\n    \"{{active_shop_id}}\"\n  ]\n}"
                         },
                         "url": {
                             "raw": "{{base_url}}/api/users/{{user_id}}",
