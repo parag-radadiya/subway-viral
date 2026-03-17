@@ -37,7 +37,9 @@ const login = asyncHandler(async (req, res) => {
       name: user.name,
       email: user.email,
       role: user.role_id,
+      active_shop_id: user.active_shop_id || user.shop_id || null,
       shop_id: user.shop_id,
+      assigned_shop_ids: user.assigned_shop_ids || [],
     },
   });
 });
