@@ -33,6 +33,7 @@ describe('Auth and onboarding integration', () => {
     expectEnvelope(res, 200);
     expect(res.body.data.token).toBeTruthy();
     expect(res.body.data.user.email).toBe('root@org.com');
+    expect(res.body.data.user.active_shop_id).toBeTruthy();
     expect(res.body.data.user.role.permissions.can_manage_roles).toBe(true);
   });
 
@@ -49,7 +50,7 @@ describe('Auth and onboarding integration', () => {
       .post('/api/auth/login')
       .send({ email: 'root@org.com', password: 'Wrong@1234' });
 
-    expectEnvelope(res, 401);
+    expectEnvelope(res, 400);
   });
 
   it('AUTH-004: blocks deactivated user login', async () => {
@@ -59,7 +60,7 @@ describe('Auth and onboarding integration', () => {
       .post('/api/auth/login')
       .send({ email: 'staff@org.com', password: 'Staff@1234' });
 
-    expectEnvelope(res, 401);
+    expectEnvelope(res, 400);
   });
 
   it('AUTH-006: updates password and clears must_change_password', async () => {

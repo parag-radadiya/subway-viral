@@ -43,9 +43,33 @@ const userSchema = new mongoose.Schema(
       ref: 'Shop',
       default: null,
     },
+    active_shop_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Shop',
+      default: null,
+    },
     assigned_shop_ids: [{
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Shop',
+    }],
+    shop_history: [{
+      shop_id: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Shop',
+      },
+      changed_at: {
+        type: Date,
+        default: Date.now,
+      },
+      changed_by: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null,
+      },
+      note: {
+        type: String,
+        maxlength: 200,
+      },
     }],
     is_active: {
       type: Boolean,
@@ -65,6 +89,32 @@ userSchema.pre('save', async function () {
   if (!this.isModified('password_hash')) return;
   const salt = await bcrypt.genSalt(12);
   this.password_hash = await bcrypt.hash(this.password_hash, salt);
+});
+
+userSchema.pre('validate', function () {
+  const assignedRaw = Array.isArray(this.assigned_shop_ids) ? this.assigned_shop_ids : [];
+  const assigned = assignedRaw
+    .filter(Boolean)
+    .map((id) => id.toString());
+
+  if (!this.active_shop_id && this.shop_id) {
+    this.active_shop_id = this.shop_id;
+  }
+
+  if (!this.active_shop_id && assigned.length > 0) {
+    this.active_shop_id = assigned[0];
+  }
+
+  if (!this.shop_id && this.active_shop_id) {
+    this.shop_id = this.active_shop_id;
+  }
+
+  const active = this.active_shop_id ? this.active_shop_id.toString() : null;
+  if (active && !assigned.includes(active)) {
+    assigned.push(active);
+  }
+
+  this.assigned_shop_ids = [...new Set(assigned)];
 });
 
 // Compare plain password with stored hash

@@ -15,14 +15,4 @@ const requirePermission = (permission) => {
   };
 };
 
-const requireRoot = () => {
-  return (req, res, next) => {
-    const roleName = req.user?.role_id?.role_name;
-    if (roleName !== 'Root') {
-      return next(new AppError('Forbidden: root access required', 403));
-    }
-    next();
-  };
-};
-
-module.exports = { requirePermission, requireRoot };
+module.exports = { requirePermission };
