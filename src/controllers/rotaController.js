@@ -27,6 +27,53 @@ function combineDateAndTime(dateValue, timeValue) {
   return d;
 }
 
+function normalizeTimeToHHMM(value) {
+  if (!value) return null;
+  const raw = String(value).trim();
+
+  const hhmmMatch = raw.match(/^(\d{1,2}):(\d{2})$/);
+  if (hhmmMatch) {
+    const h = Number(hhmmMatch[1]);
+    const m = Number(hhmmMatch[2]);
+    if (h < 0 || h > 23 || m < 0 || m > 59) return null;
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+  }
+
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return `${String(parsed.getUTCHours()).padStart(2, '0')}:${String(parsed.getUTCMinutes()).padStart(2, '0')}`;
+}
+
+function normalizeBulkAssignments(assignments) {
+  return assignments.map((assignment, idx) => {
+    if (!assignment?.user_id) {
+      throw new AppError(`Assignment #${idx + 1} requires user_id`, 400);
+    }
+
+    const startTime = normalizeTimeToHHMM(assignment.start_time || assignment.shift_start);
+    const endTime = normalizeTimeToHHMM(assignment.end_time || assignment.shift_end);
+
+    if (!startTime) {
+      throw new AppError(
+        `Assignment #${idx + 1} requires a valid start_time (HH:MM) or shift_start (ISO datetime)`,
+        400
+      );
+    }
+    if (!endTime) {
+      throw new AppError(
+        `Assignment #${idx + 1} requires a valid end_time (HH:MM) or shift_end (ISO datetime)`,
+        400
+      );
+    }
+
+    return {
+      ...assignment,
+      start_time: startTime,
+      end_time: endTime,
+    };
+  });
+}
+
 function normalizeRotaPayload(payload) {
   const shiftStart = payload.shift_start
     ? new Date(payload.shift_start)
@@ -236,16 +283,14 @@ const bulkCreate = asyncHandler(async (req, res) => {
   if (days.some((d) => d < 0 || d > 6)) {
     throw new AppError('days values must be 0 (Mon) - 6 (Sun)', 400);
   }
-  if (assignments.some((a) => !a.end_time)) {
-    throw new AppError('Each assignment requires end_time', 400);
-  }
+  const normalizedAssignments = normalizeBulkAssignments(assignments);
 
   const scope = buildRotaManageScope(req.user);
   assertManageShopAllowed(scope, shop_id);
 
   const dates = buildDates(week_start, days);
   const { start: weekStart, end: weekEnd } = weekBounds(week_start);
-  const userIds = [...new Set(assignments.map((a) => a.user_id))];
+  const userIds = [...new Set(normalizedAssignments.map((a) => a.user_id))];
 
   if (replace_existing) {
     await Rota.deleteMany({
@@ -257,15 +302,24 @@ const bulkCreate = asyncHandler(async (req, res) => {
 
   const toInsert = [];
   for (const date of dates) {
-    for (const assignment of assignments) {
+    for (const assignment of normalizedAssignments) {
+      const shiftStart = combineDateAndTime(date, assignment.start_time);
+      const shiftEnd = combineDateAndTime(date, assignment.end_time);
+      if (!shiftStart || !shiftEnd || shiftEnd <= shiftStart) {
+        throw new AppError(
+          `Invalid shift window for user ${assignment.user_id}. Ensure end_time is after start_time.`,
+          400
+        );
+      }
+
       toInsert.push({
         user_id: assignment.user_id,
         shop_id,
         shift_date: date,
-        shift_start: combineDateAndTime(date, assignment.start_time),
-        shift_end: combineDateAndTime(date, assignment.end_time),
+        shift_start: shiftStart,
+        shift_end: shiftEnd,
         start_time: assignment.start_time,
-        end_time: assignment.end_time || undefined,
+        end_time: assignment.end_time,
         note: assignment.note || undefined,
       });
     }
