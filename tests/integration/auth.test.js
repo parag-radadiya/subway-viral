@@ -76,7 +76,7 @@ describe('Auth and onboarding integration', () => {
     const updateRes = await request(app)
       .put('/api/users/me/password')
       .set('Authorization', `Bearer ${token}`)
-      .send({ currentPassword: 'Admin@1234', newPassword: 'Admin@1234_new' });
+      .send({ currentPassword: 'Admin@1234', newPassword: 'Admin@1234_new', device_id: 'Test123' });
 
     expectEnvelope(updateRes, 200);
 
@@ -99,7 +99,7 @@ describe('Auth and onboarding integration', () => {
     const res = await request(app)
       .put('/api/users/me/password')
       .set('Authorization', `Bearer ${loginRes.body.data.token}`)
-      .send({ currentPassword: 'Wrong@1234', newPassword: 'Manager@1234_new' });
+      .send({ currentPassword: 'Wrong@1234', newPassword: 'Manager@1234_new', device_id: 'Test123' });
 
     expectEnvelope(res, 401);
   });
@@ -112,7 +112,7 @@ describe('Auth and onboarding integration', () => {
     const res = await request(app)
       .put('/api/users/me/password')
       .set('Authorization', `Bearer ${loginRes.body.data.token}`)
-      .send({ currentPassword: 'Manager@1234', newPassword: 'short' });
+      .send({ currentPassword: 'Manager@1234', newPassword: 'short', device_id: 'Test123' });
 
     expectEnvelope(res, 400);
   });

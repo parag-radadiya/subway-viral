@@ -178,13 +178,17 @@ const deleteUser = asyncHandler(async (req, res) => {
 // @route  PUT /api/users/me/password
 // @access Self (JWT required)
 const updatePassword = asyncHandler(async (req, res) => {
-  const { currentPassword, newPassword } = req.body;
+  const { currentPassword, newPassword, device_id } = req.body;
 
   if (!currentPassword || !newPassword) {
     throw new AppError('Both currentPassword and newPassword are required', 400);
   }
   if (newPassword.length < 8) {
     throw new AppError('New password must be at least 8 characters', 400);
+  }
+
+  if (!device_id || typeof device_id !== 'string' || !device_id.trim()) {
+      throw new AppError('device_id is required', 400);
   }
 
   const user = await User.findById(req.user._id).select('+password_hash');
@@ -197,6 +201,7 @@ const updatePassword = asyncHandler(async (req, res) => {
 
   user.password_hash = newPassword; // bcrypt pre-save hook re-hashes
   user.must_change_password = false;
+  user.device_id = device_id.trim();
   await user.save();
 
   return sendSuccess(res, 'Password updated successfully', {});
