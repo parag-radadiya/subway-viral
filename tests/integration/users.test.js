@@ -38,14 +38,17 @@ describe('Users module integration', () => {
     expect(Array.isArray(res.body.data.users)).toBe(true);
   });
 
-  it('USER-002: blocks employee from listing users', async () => {
+  it('USER-002: staff user list is self-scoped', async () => {
     const staffLogin = await login('staff@org.com', 'Staff@1234');
 
     const res = await request(app)
       .get('/api/users')
       .set('Authorization', `Bearer ${staffLogin.token}`);
 
-    expectEnvelope(res, 403);
+    expectEnvelope(res, 200);
+    expect(Array.isArray(res.body.data.users)).toBe(true);
+    expect(res.body.data.users.length).toBe(1);
+    expect(res.body.data.users[0]._id).toBe(fixtures.users.staffUser._id.toString());
   });
 
   it('USER-005: allows admin to create user', async () => {
@@ -189,14 +192,14 @@ describe('Users module integration', () => {
     expectEnvelope(loginRes, 400);
   });
 
-  it('SEC-003: blocks employee from reading another user profile', async () => {
+  it('SEC-003: staff cannot read another user profile (scoped not found)', async () => {
     const staffLogin = await login('staff@org.com', 'Staff@1234');
 
     const res = await request(app)
       .get(`/api/users/${fixtures.users.managerUser._id}`)
       .set('Authorization', `Bearer ${staffLogin.token}`);
 
-    expectEnvelope(res, 403);
+    expectEnvelope(res, 404);
   });
 
   it('USER summary: manager can read assigned-shops staff summary and staff is forbidden', async () => {
@@ -259,5 +262,4 @@ describe('Users module integration', () => {
     expect(newLoginRes.body.data.must_change_password).toBe(true);
   });
 });
-
 

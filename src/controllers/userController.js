@@ -3,7 +3,11 @@ const Shop = require('../models/Shop');
 const AppError = require('../utils/AppError');
 const asyncHandler = require('../utils/asyncHandler');
 const { sendSuccess } = require('../utils/response');
-const { buildShopScope } = require('../middleware/shopScopeMiddleware');
+const {
+  buildShopScope,
+  isShopAllowed,
+  buildReadScope,
+} = require('../middleware/shopScopeMiddleware');
 
 const toId = (value) => {
   if (!value) return null;
@@ -27,14 +31,63 @@ const resolveShopState = ({ shop_id, active_shop_id, assigned_shop_ids }) => {
   };
 };
 
+const applyUserReadScopeFilter = (filter, req, scope) => {
+  if (scope.mode === 'all') return;
+
+  if (scope.mode === 'self') {
+    filter._id = req.user._id;
+    return;
+  }
+
+  if (!scope.shopScope.all && scope.shopScope.ids.length === 0) {
+    filter.shop_id = { $in: [] };
+    return;
+  }
+
+  if (!scope.shopScope.all) {
+    filter.shop_id = { $in: scope.shopScope.ids };
+  }
+};
+
+const isUserReadableInScope = (scope, user) => {
+  if (scope.mode === 'all') return true;
+  if (scope.mode === 'self') return false;
+  if (scope.shopScope.all) return true;
+  return isShopAllowed(scope.shopScope, user.active_shop_id || user.shop_id);
+};
+
 // @route  GET /api/users
-// @access Admin/Manager
+// @access Scoped by role (all/assigned shops/self)
 const getUsers = asyncHandler(async (req, res) => {
-  const users = await User.find({ is_active: true })
+  const scope = buildReadScope(req.user);
+  const filter = { is_active: true };
+  applyUserReadScopeFilter(filter, req, scope);
+
+  if (req.query.shop_id) {
+    if (scope.mode === 'shops' && !scope.shopScope.all && !isShopAllowed(scope.shopScope, req.query.shop_id)) {
+      return sendSuccess(res, 'Users fetched successfully', {
+        count: 0,
+        users: [],
+      });
+    }
+    if (scope.mode === 'self') {
+      const selfShopScope = buildShopScope(req.user);
+      if (!isShopAllowed(selfShopScope, req.query.shop_id)) {
+        return sendSuccess(res, 'Users fetched successfully', {
+          count: 0,
+          users: [],
+        });
+      }
+    }
+    filter.shop_id = req.query.shop_id;
+  }
+
+  const users = await User.find(filter)
     .populate('role_id', 'role_name permissions')
     .populate('shop_id', 'name')
     .populate('active_shop_id', 'name')
     .populate('shop_history.shop_id', 'name');
+
   return sendSuccess(res, 'Users fetched successfully', {
     count: users.length,
     users,
@@ -42,8 +95,14 @@ const getUsers = asyncHandler(async (req, res) => {
 });
 
 // @route  GET /api/users/:id
-// @access Admin/Manager
+// @access Scoped by role (all/assigned shops/self)
 const getUser = asyncHandler(async (req, res) => {
+  const scope = buildReadScope(req.user);
+
+  if (scope.mode === 'self' && req.params.id.toString() !== req.user._id.toString()) {
+    throw new AppError('User not found', 404);
+  }
+
   const user = await User.findById(req.params.id)
     .populate('role_id', 'role_name permissions')
     .populate('shop_id', 'name')
@@ -51,6 +110,10 @@ const getUser = asyncHandler(async (req, res) => {
     .populate('shop_history.shop_id', 'name');
 
   if (!user || !user.is_active) {
+    throw new AppError('User not found', 404);
+  }
+
+  if (!isUserReadableInScope(scope, user) && user._id.toString() !== req.user._id.toString()) {
     throw new AppError('User not found', 404);
   }
 

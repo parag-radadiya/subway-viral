@@ -90,11 +90,9 @@ router.put('/me/device', protect, updateOwnDevice);
  */
 router.get('/', protect, getUsers);
 router.post('/', protect, requirePermission('can_create_users'), createUser);
-
 router.get('/assigned-shops/staff-summary', protect, getAssignedShopsStaffSummary);
 
 /**
-router.get('/', protect, requirePermission('can_view_all_staff'), getUsers);
  * /api/users/{id}:
  *   get:
  *     summary: Get user by ID
@@ -142,6 +140,6 @@ router.get('/', protect, requirePermission('can_view_all_staff'), getUsers);
  */
 router.get('/:id', protect, getUser);
 router.put('/:id', protect, requirePermission('can_create_users'), updateUser);
-router.get('/:id', protect, requirePermission('can_view_all_staff'), getUser);
+router.delete('/:id', protect, requirePermission('can_create_users'), deleteUser);
 
 module.exports = router;

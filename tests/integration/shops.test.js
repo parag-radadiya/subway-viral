@@ -98,5 +98,24 @@ describe('Shops module integration', () => {
       .set('Authorization', `Bearer ${adminLogin.token}`);
     expectEnvelope(deleteRes, 404);
   });
+
+  it('SHOP scope: staff sees only assigned shops and cannot read unassigned shop', async () => {
+    const staffLogin = await login('staff@org.com', 'Staff@1234');
+
+    const listRes = await request(app)
+      .get('/api/shops')
+      .set('Authorization', `Bearer ${staffLogin.token}`);
+
+    expectEnvelope(listRes, 200);
+    expect(Array.isArray(listRes.body.data.shops)).toBe(true);
+    expect(listRes.body.data.shops.length).toBe(1);
+    expect(listRes.body.data.shops[0]._id).toBe(fixtures.shops.mainShop._id.toString());
+
+    const blockedRes = await request(app)
+      .get(`/api/shops/${fixtures.shops.eastShop._id}`)
+      .set('Authorization', `Bearer ${staffLogin.token}`);
+
+    expectEnvelope(blockedRes, 404);
+  });
 });
 
