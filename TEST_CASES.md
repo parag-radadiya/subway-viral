@@ -459,6 +459,10 @@ Use these tests against local/staging APIs before every release.
 - Token with `can_manage_inventory`
 - Expect: `200`
 
+### INV-012 List items pagination and sorting
+- API: `GET /api/inventory/items?page=1&limit=20&sort_by=item_name&sort_order=asc`
+- Expect: `200`, response includes `total`, `page`, `limit`, `total_pages`, and sorted `items`
+
 ### INV-002 List items forbidden
 - Token without permission
 - Expect: `403`
@@ -485,6 +489,11 @@ Use these tests against local/staging APIs before every release.
 ### INV-008 Delete item success
 - API: `DELETE /api/inventory/items/:id`
 - Expect: `200`
+
+### INV-011 Delete item blocked when linked queries exist
+- API: `DELETE /api/inventory/items/:id`
+- Precondition: item has at least one inventory query
+- Expect: `409`
 
 ---
 
@@ -516,11 +525,34 @@ Use these tests against local/staging APIs before every release.
   - linked item status becomes `Good`
 
 ### QRY-006 Close already closed query
-- Expect: `400`
+- Expect: `409` (deterministic conflict)
 
 ### QRY-007 Inventory queries forbidden
 - token without `can_manage_inventory`
 - Expect: `403`
+
+### QRY-009 Prevent second open query for same item
+- API: `POST /api/inventory/queries`
+- Open query once for item, then open again while first is still open
+- Expect: `409`
+
+### QRY-010 List queries pagination and sorting
+- API: `GET /api/inventory/queries?page=1&limit=20&sort_by=createdAt&sort_order=desc`
+- Expect: `200`, response includes `total`, `page`, `limit`, `total_pages`, and sorted `queries`
+
+### QRY-011 Close with another open query keeps item Damaged
+- Precondition: legacy data has 2 open queries for same item
+- Close one query
+- Expect: item status remains `Damaged`
+
+### QRY-012 Concurrent close calls are deterministic
+- Send two close requests simultaneously for the same open query
+- Expect: one `200`, one `409`
+
+### AUD-001 Inventory audit logs list success
+- API: `GET /api/inventory/audit-logs`
+- Token with `can_manage_inventory`
+- Expect: `200`, logs with action, actor, and timestamps
 
 ---
 

@@ -382,7 +382,7 @@ const options = {
             shop_id: { $ref: '#/components/schemas/Shop' },
             reported_by: { $ref: '#/components/schemas/UserPublic' },
             issue_note: { type: 'string' },
-            status: { type: 'string', enum: ['Open', 'Resolved', 'Closed'] },
+            status: { type: 'string', enum: ['Open', 'Closed'] },
             repair_cost: { type: 'number' },
             resolve_note: { type: 'string' },
             resolved_by: { $ref: '#/components/schemas/UserPublic' },

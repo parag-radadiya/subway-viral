@@ -32,13 +32,34 @@ const { requirePermission } = require('../middleware/permMiddleware');
  *         name: status
  *         schema:
  *           type: string
- *           enum: [Open, Resolved, Closed]
+ *           enum: [Open, Closed]
  *         description: Filter by ticket status
  *       - in: query
  *         name: item_id
  *         schema:
  *           type: string
  *         description: Filter by specific inventory item
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           maximum: 100
+ *       - in: query
+ *         name: sort_by
+ *         schema:
+ *           type: string
+ *           enum: [createdAt, updatedAt, status, resolved_at, repair_cost]
+ *       - in: query
+ *         name: sort_order
+ *         schema:
+ *           type: string
+ *           enum: [asc, desc]
  *     responses:
  *       200:
  *         description: List of query tickets
@@ -107,7 +128,7 @@ const { requirePermission } = require('../middleware/permMiddleware');
  *       - BearerAuth: []
  *     description: |
  *       Records resolution notes and repair costs, and closes the ticket.
- *       **Auto-Sync Logic**: Closing a query automatically reverts the corresponding `InventoryItem.status` back to 'Good'.
+ *       **Auto-Sync Logic**: Closing a query reverts the corresponding `InventoryItem.status` to 'Good' only when no other open query exists for that item.
  *       Requires `can_manage_inventory` permission.
  *     parameters:
  *       - in: path
@@ -133,6 +154,8 @@ const { requirePermission } = require('../middleware/permMiddleware');
  *                 data: { $ref: '#/components/schemas/InventoryQuery' }
  *       400:
  *         description: Query already closed or invalid data
+ *       409:
+ *         description: Query already closed (concurrent close race)
  */
 router.use(protect, requirePermission('can_manage_inventory'));
 router.get('/', getQueries);

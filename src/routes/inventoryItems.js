@@ -36,6 +36,27 @@ const { requirePermission } = require('../middleware/permMiddleware');
  *           type: string
  *           enum: [Good, Damaged, In Repair]
  *         example: Good
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           maximum: 100
+ *       - in: query
+ *         name: sort_by
+ *         schema:
+ *           type: string
+ *           enum: [createdAt, updatedAt, item_name, status, purchase_date, expiry_date]
+ *       - in: query
+ *         name: sort_order
+ *         schema:
+ *           type: string
+ *           enum: [asc, desc]
  *     responses:
  *       200:
  *         description: Inventory item list
@@ -164,10 +185,6 @@ const { requirePermission } = require('../middleware/permMiddleware');
  *               $ref: '#/components/schemas/ErrorResponse'
  *       404:
  *         description: Item not found
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
  *       500:
  *         description: Server error
  *         content:
@@ -230,10 +247,6 @@ const { requirePermission } = require('../middleware/permMiddleware');
  *               $ref: '#/components/schemas/ErrorResponse'
  *       404:
  *         description: Item not found
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
  *   delete:
  *     summary: Delete item
  *     tags: [Inventory Items]
@@ -269,6 +282,12 @@ const { requirePermission } = require('../middleware/permMiddleware');
  *               $ref: '#/components/schemas/ErrorResponse'
  *       404:
  *         description: Item not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       409:
+ *         description: Cannot delete item when linked inventory queries exist
  *         content:
  *           application/json:
  *             schema:

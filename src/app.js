@@ -14,6 +14,7 @@ const rotaRoutes = require('./routes/rotas');
 const attendanceRoutes = require('./routes/attendance');
 const inventoryItemRoutes = require('./routes/inventoryItems');
 const inventoryQueryRoutes = require('./routes/inventoryQueries');
+const inventoryAuditRoutes = require('./routes/inventoryAudit');
 const observabilityRoutes = require('./routes/observability');
 const { sendSuccess } = require('./utils/response');
 const { notFoundHandler, globalErrorHandler } = require('./middleware/errorHandler');
@@ -50,6 +51,7 @@ app.use('/api/rotas', rotaRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/inventory/items', inventoryItemRoutes);
 app.use('/api/inventory/queries', inventoryQueryRoutes);
+app.use('/api/inventory/audit-logs', inventoryAuditRoutes);
 app.use('/api/observability', observabilityRoutes);
 
 // 404 + global error handlers

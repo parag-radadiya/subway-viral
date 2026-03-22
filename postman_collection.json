@@ -65,6 +65,31 @@
             "key": "week_start",
             "value": "2026-03-16",
             "type": "string"
+        },
+        {
+            "key": "page",
+            "value": "1",
+            "type": "string"
+        },
+        {
+            "key": "limit",
+            "value": "20",
+            "type": "string"
+        },
+        {
+            "key": "sort_by",
+            "value": "createdAt",
+            "type": "string"
+        },
+        {
+            "key": "sort_order",
+            "value": "desc",
+            "type": "string"
+        },
+        {
+            "key": "audit_action",
+            "value": "QUERY_CLOSED",
+            "type": "string"
         }
     ],
     "auth": {
@@ -1174,6 +1199,41 @@
                     }
                 },
                 {
+                    "name": "Get Items (Paginated + Sorted)",
+                    "request": {
+                        "method": "GET",
+                        "url": {
+                            "raw": "{{base_url}}/api/inventory/items?page={{page}}&limit={{limit}}&sort_by=item_name&sort_order=asc",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "inventory",
+                                "items"
+                            ],
+                            "query": [
+                                {
+                                    "key": "page",
+                                    "value": "{{page}}"
+                                },
+                                {
+                                    "key": "limit",
+                                    "value": "{{limit}}"
+                                },
+                                {
+                                    "key": "sort_by",
+                                    "value": "item_name"
+                                },
+                                {
+                                    "key": "sort_order",
+                                    "value": "asc"
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
                     "name": "Create Item",
                     "event": [
                         {
@@ -1305,6 +1365,41 @@
                     }
                 },
                 {
+                    "name": "Get Queries (Paginated + Sorted)",
+                    "request": {
+                        "method": "GET",
+                        "url": {
+                            "raw": "{{base_url}}/api/inventory/queries?page={{page}}&limit={{limit}}&sort_by=createdAt&sort_order={{sort_order}}",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "inventory",
+                                "queries"
+                            ],
+                            "query": [
+                                {
+                                    "key": "page",
+                                    "value": "{{page}}"
+                                },
+                                {
+                                    "key": "limit",
+                                    "value": "{{limit}}"
+                                },
+                                {
+                                    "key": "sort_by",
+                                    "value": "createdAt"
+                                },
+                                {
+                                    "key": "sort_order",
+                                    "value": "{{sort_order}}"
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
                     "name": "Open Issue Query (auto-sets item → Damaged)",
                     "event": [
                         {
@@ -1401,6 +1496,77 @@
                                 "queries",
                                 "{{query_id}}",
                                 "close"
+                            ]
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "name": "🧾 Inventory Audit Logs",
+            "item": [
+                {
+                    "name": "Get Audit Logs",
+                    "request": {
+                        "method": "GET",
+                        "url": {
+                            "raw": "{{base_url}}/api/inventory/audit-logs?page={{page}}&limit={{limit}}&sort_by={{sort_by}}&sort_order={{sort_order}}",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "inventory",
+                                "audit-logs"
+                            ],
+                            "query": [
+                                {
+                                    "key": "page",
+                                    "value": "{{page}}"
+                                },
+                                {
+                                    "key": "limit",
+                                    "value": "{{limit}}"
+                                },
+                                {
+                                    "key": "sort_by",
+                                    "value": "{{sort_by}}"
+                                },
+                                {
+                                    "key": "sort_order",
+                                    "value": "{{sort_order}}"
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "Get Audit Logs by Action",
+                    "request": {
+                        "method": "GET",
+                        "url": {
+                            "raw": "{{base_url}}/api/inventory/audit-logs?action={{audit_action}}&page={{page}}&limit={{limit}}",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "inventory",
+                                "audit-logs"
+                            ],
+                            "query": [
+                                {
+                                    "key": "action",
+                                    "value": "{{audit_action}}"
+                                },
+                                {
+                                    "key": "page",
+                                    "value": "{{page}}"
+                                },
+                                {
+                                    "key": "limit",
+                                    "value": "{{limit}}"
+                                }
                             ]
                         }
                     }

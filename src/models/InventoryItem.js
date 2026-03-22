@@ -29,4 +29,6 @@ const inventoryItemSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+inventoryItemSchema.index({ shop_id: 1, status: 1 }, { name: 'idx_item_shop_status' });
+
 module.exports = mongoose.model('InventoryItem', inventoryItemSchema);

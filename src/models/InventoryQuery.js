@@ -24,7 +24,7 @@ const inventoryQuerySchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['Open', 'Resolved', 'Closed'],
+      enum: ['Open', 'Closed'],
       default: 'Open',
     },
     repair_cost: {
@@ -47,6 +47,21 @@ const inventoryQuerySchema = new mongoose.Schema(
     },
   },
   { timestamps: true }
+);
+
+// At most one active query can exist per inventory item.
+inventoryQuerySchema.index(
+  { item_id: 1, status: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { status: 'Open' },
+    name: 'unique_open_query_per_item',
+  }
+);
+
+inventoryQuerySchema.index(
+  { item_id: 1, status: 1, shop_id: 1, createdAt: -1 },
+  { name: 'idx_query_item_status_shop_created' }
 );
 
 module.exports = mongoose.model('InventoryQuery', inventoryQuerySchema);
