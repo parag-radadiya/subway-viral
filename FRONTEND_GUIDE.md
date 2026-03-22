@@ -87,6 +87,25 @@ The punch-in process is a 3-step security handshake:
 3. **Closing**: To resolve an issue, call `PUT /api/inventory/queries/{id}/close` with repair costs and notes.
 4. **Revert**: The item status will automatically flip back to "Good" via the backend logic.
 
+### Screen -> API Mapping
+
+- **Inventory List Screen**
+  - `GET /api/inventory/items?page=1&limit=20&sort_by=createdAt&sort_order=desc`
+
+- **Inventory Item View Screen**
+  - `GET /api/inventory/items/{item_id}`
+  - optional related tickets: `GET /api/inventory/queries?item_id={item_id}`
+
+- **Inventory Query List Screen**
+  - `GET /api/inventory/queries?page=1&limit=20&sort_by=createdAt&sort_order=desc`
+
+- **Inventory Query View Screen**
+  - `GET /api/inventory/queries/{query_id}`
+  - close action (if open): `PUT /api/inventory/queries/{query_id}/close`
+
+- **Inventory Audit Timeline Screen**
+  - `GET /api/inventory/audit-logs?page=1&limit=20&sort_by=createdAt&sort_order=desc`
+
 ---
 
 ##  Handling Permissions

@@ -1274,6 +1274,24 @@
                     }
                 },
                 {
+                    "name": "Get Item by ID",
+                    "request": {
+                        "method": "GET",
+                        "url": {
+                            "raw": "{{base_url}}/api/inventory/items/{{item_id}}",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "inventory",
+                                "items",
+                                "{{item_id}}"
+                            ]
+                        }
+                    }
+                },
+                {
                     "name": "Update Item",
                     "request": {
                         "method": "PUT",
@@ -1454,6 +1472,29 @@
                                 "inventory",
                                 "queries",
                                 "{{query_id}}"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "Get Query View (with item filter helper)",
+                    "request": {
+                        "method": "GET",
+                        "url": {
+                            "raw": "{{base_url}}/api/inventory/queries?item_id={{item_id}}",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "inventory",
+                                "queries"
+                            ],
+                            "query": [
+                                {
+                                    "key": "item_id",
+                                    "value": "{{item_id}}"
+                                }
                             ]
                         }
                     }

@@ -129,10 +129,31 @@ Admin/manager screens can fetch timeline via:
 ## 6) Recommended Frontend Screen Mapping
 
 - Inventory List: `GET /api/inventory/items`
+- Item View Screen (single item details): `GET /api/inventory/items/:id`
 - Item Create/Edit Form: `POST/PUT /api/inventory/items...`
 - Query List: `GET /api/inventory/queries`
-- Query Details + Close: `GET /api/inventory/queries/:id`, `PUT /close`
+- Query View Screen (single query details): `GET /api/inventory/queries/:id`
+- Query Details + Close Action: `GET /api/inventory/queries/:id`, `PUT /api/inventory/queries/:id/close`
 - Audit Timeline: `GET /api/inventory/audit-logs`
+
+## 6.1) Screen API Contracts (View Screens)
+
+### Item View Screen
+
+- Load item details: `GET /api/inventory/items/:id`
+- Optional: load related query list for same item using `GET /api/inventory/queries?item_id=<item_id>`
+- UI should handle:
+  - `404` when item is outside scope or not found
+  - `403` when permission is missing
+
+### Query View Screen
+
+- Load query details: `GET /api/inventory/queries/:id`
+- Optional: load referenced item details using `GET /api/inventory/items/:id`
+- If query is open and user has access, allow close action via `PUT /api/inventory/queries/:id/close`
+- UI should handle:
+  - `404` when query is outside scope or not found
+  - `409` if query already closed by another user/session
 
 ## 7) Minimal UI Permission Logic
 
@@ -141,4 +162,5 @@ After login, gate module by:
 - `permissions.can_manage_inventory`
 
 Then for role-scoped users (manager/sub-manager), show normal screens but expect data limited by assigned shop scope from backend.
+
 
