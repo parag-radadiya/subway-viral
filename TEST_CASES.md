@@ -305,6 +305,56 @@ Use these tests against local/staging APIs before every release.
 - Employee token
 - Expect: `403`
 
+### ROTA-014 Staff list ignores foreign user filter (self-scope enforced)
+- API: `GET /api/rotas?user_id=<another-user-id>`
+- Token: employee
+- Expect: `200`, records belong to logged-in employee only
+
+### ROTA-015 Staff cannot fetch other user rota by ID
+- API: `GET /api/rotas/:id`
+- Token: employee, `:id` belongs to another user
+- Expect: `404`
+
+### ROTA-016 Manager rota reads limited to assigned shops
+- API: `GET /api/rotas`, `GET /api/rotas/week?shop_id=<unassigned-shop>&week_start=...`
+- Token: manager with limited `assigned_shop_ids`
+- Expect: unassigned shop data excluded/empty
+
+### ROTA-017 Manager cannot create rota in unassigned shop
+- API: `POST /api/rotas`
+- Token: manager with limited shop scope
+- Expect: `403`
+
+### ROTA-018 Manager cannot update/delete rota in unassigned shop
+- API: `PUT /api/rotas/:id`, `DELETE /api/rotas/:id`
+- Token: manager with limited shop scope
+- Expect: `403`
+
+### ROTA-019 Clear week respects manager shop scope
+- API: `DELETE /api/rotas/week?week_start=...`
+- Token: manager with limited `assigned_shop_ids`
+- Expect: only assigned-shop week data deleted
+
+### ROTA-020 Create rota using merged datetime keys
+- API: `POST /api/rotas`
+- Payload uses `shift_start` and `shift_end`
+- Expect: `201`, stored `start_time`/`end_time` derived correctly
+
+### ROTA-021 Block overlapping shift for same employee
+- API: `POST /api/rotas`
+- Create `08:00-12:00` then try `09:00-12:00` for same user/date
+- Expect: `409`
+
+### ROTA-022 Allow adjacent shifts for same employee
+- API: `POST /api/rotas`
+- Create `08:00-12:00` and then `12:00-16:00` for same user/date
+- Expect: both succeed (`201`)
+
+### ROTA-023 Bulk create skips overlapping windows
+- API: `POST /api/rotas/bulk`
+- Two assignments overlap for same user/day
+- Expect: `201`, one created and one skipped with overlap reason in `data.conflicts[]`
+
 ---
 
 ## 9) Attendance Module
@@ -380,9 +430,25 @@ Use these tests against local/staging APIs before every release.
 - Token with `can_view_all_staff`
 - Expect: `200`, records array
 
-### ATT-017 Attendance list forbidden
+### ATT-017 Attendance list self-scope for employee
+- API: `GET /api/attendance?user_id=<another-user-id>`
 - Employee token
+- Expect: `200`, records limited to logged-in employee
+
+### ATT-018 Punch in blocked when device is not registered
+- API: `POST /api/attendance/punch-in`
+- Precondition: `device_id` is null for logged-in employee
 - Expect: `403`
+
+### ATT-019 Admin can view attendance across shops
+- API: `GET /api/attendance`
+- Token: admin/root
+- Expect: `200`, includes multi-shop records
+
+### ATT-020 Sub-manager attendance view is assigned-shop only
+- API: `GET /api/attendance`
+- Token: sub-manager with limited `assigned_shop_ids`
+- Expect: `200`, records only from assigned shops
 
 ---
 

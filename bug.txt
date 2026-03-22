@@ -4,3 +4,12 @@ Medium — Attendance shop authorization gap: Punch-in validates geofence + toke
 Medium — Shop directory visible to all authenticated users: GET /api/shops and GET /api/shops/:id are protected but not permission-scoped, exposing all branches to every role. See src/routes/shops.js:38, src/routes/shops.js:86.
 Low (but important ops risk) — Seed credentials are documented and easy to misuse in non-dev: Root credentials are shown in docs and seed script creates predictable passwords. See README.md:76-79 and src/config/seed.js:244-251.
 Low — Frontend guide/API mismatch: Guide says permissions can be fetched via GET /api/users/me, but endpoint does not exist; only password endpoint exists. See FRONTEND_GUIDE.md:75, src/routes/users.js:34, and no /me read route.
+
+
+
+make call for view attendance record for admin , sub manager and manager and for emp itself for diff screens
+
+get all users by shop and skip root and admin
+
+my rota - for employee to view their own rota, for sub manager and manager to view rotas of their assigned shops, and for admin to view all rotas of users.
+To implement the functionality for viewing attendance records and rotas based on user roles (admin, sub-manager, manager, and employee), you can follow the steps below:

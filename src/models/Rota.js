@@ -92,4 +92,10 @@ rotaSchema.index(
   { unique: true, name: 'unique_user_shiftstart' }
 );
 
+// Helps overlap checks (user + time window queries).
+rotaSchema.index(
+  { user_id: 1, shift_start: 1, shift_end: 1 },
+  { name: 'idx_user_shift_window' }
+);
+
 module.exports = mongoose.model('Rota', rotaSchema);

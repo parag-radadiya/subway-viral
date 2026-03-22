@@ -103,6 +103,40 @@ function normalizeRotaPayload(payload) {
   };
 }
 
+function isOverlappingWindow(aStart, aEnd, bStart, bEnd) {
+  return aStart < bEnd && aEnd > bStart;
+}
+
+function toRotaTimeLabel(shiftStart, shiftEnd) {
+  const from = new Date(shiftStart).toISOString();
+  const to = new Date(shiftEnd).toISOString();
+  return `${from} to ${to}`;
+}
+
+async function findOverlappingRota({ userId, shiftStart, shiftEnd, excludeRotaId = null }) {
+  const filter = {
+    user_id: userId,
+    shift_start: { $lt: shiftEnd },
+    shift_end: { $gt: shiftStart },
+  };
+
+  if (excludeRotaId) {
+    filter._id = { $ne: excludeRotaId };
+  }
+
+  return Rota.findOne(filter).select('shift_start shift_end user_id shop_id');
+}
+
+async function assertNoOverlapOrThrow({ userId, shiftStart, shiftEnd, excludeRotaId = null }) {
+  const overlapping = await findOverlappingRota({ userId, shiftStart, shiftEnd, excludeRotaId });
+  if (!overlapping) return;
+
+  throw new AppError(
+    `Shift overlaps with an existing rota (${toRotaTimeLabel(overlapping.shift_start, overlapping.shift_end)})`,
+    409
+  );
+}
+
 function weekBounds(weekStart) {
   const dates = buildDates(weekStart, [0, 1, 2, 3, 4, 5, 6]);
   const start = new Date(dates[0]);
@@ -222,6 +256,12 @@ const createRota = asyncHandler(async (req, res) => {
   assertManageShopAllowed(scope, req.body.shop_id);
   const payload = normalizeRotaPayload(req.body);
 
+  await assertNoOverlapOrThrow({
+    userId: payload.user_id,
+    shiftStart: payload.shift_start,
+    shiftEnd: payload.shift_end,
+  });
+
   try {
     const rota = await Rota.create(payload);
     const populated = await rota.populate([
@@ -244,6 +284,13 @@ const updateRota = asyncHandler(async (req, res) => {
   assertManageShopAllowed(scope, existing.shop_id);
   if (req.body.shop_id) assertManageShopAllowed(scope, req.body.shop_id);
   const mergedPayload = normalizeRotaPayload({ ...existing.toObject(), ...req.body });
+
+  await assertNoOverlapOrThrow({
+    userId: mergedPayload.user_id,
+    shiftStart: mergedPayload.shift_start,
+    shiftEnd: mergedPayload.shift_end,
+    excludeRotaId: existing._id,
+  });
 
   try {
     const rota = await Rota.findByIdAndUpdate(req.params.id, mergedPayload, {
@@ -279,6 +326,9 @@ const bulkCreate = asyncHandler(async (req, res) => {
 
   if (!shop_id || !week_start || !Array.isArray(days) || !Array.isArray(assignments)) {
     throw new AppError('shop_id, week_start, days[], and assignments[] are all required', 400);
+  }
+  if (days.length === 0 || assignments.length === 0) {
+    throw new AppError('days[] and assignments[] cannot be empty', 400);
   }
   if (days.some((d) => d < 0 || d > 6)) {
     throw new AppError('days values must be 0 (Mon) - 6 (Sun)', 400);
@@ -325,19 +375,90 @@ const bulkCreate = asyncHandler(async (req, res) => {
     }
   }
 
-  let created = 0;
   const conflicts = [];
 
-  const result = await Rota.insertMany(toInsert, { ordered: false }).catch((err) => {
+  if (toInsert.length === 0) {
+    return sendSuccess(res, '0 rota entries created, 0 skipped (duplicates/overlaps)', {
+      created: 0,
+      skipped: 0,
+      conflicts,
+    }, 201);
+  }
+
+  const minShiftStart = new Date(Math.min(...toInsert.map((entry) => entry.shift_start.getTime())));
+  const maxShiftEnd = new Date(Math.max(...toInsert.map((entry) => entry.shift_end.getTime())));
+
+  const existingByUser = new Map();
+  if (toInsert.length > 0) {
+    const existingCandidates = await Rota.find({
+      user_id: { $in: userIds },
+      shift_start: { $lt: maxShiftEnd },
+      shift_end: { $gt: minShiftStart },
+    }).select('user_id shift_start shift_end');
+
+    existingCandidates.forEach((rota) => {
+      const uid = normalizeId(rota.user_id);
+      if (!existingByUser.has(uid)) existingByUser.set(uid, []);
+      existingByUser.get(uid).push({ shift_start: rota.shift_start, shift_end: rota.shift_end });
+    });
+  }
+
+  const acceptedByUser = new Map();
+  const filteredToInsert = [];
+
+  toInsert.forEach((candidate) => {
+    const uid = normalizeId(candidate.user_id);
+    const existingWindows = existingByUser.get(uid) || [];
+    const acceptedWindows = acceptedByUser.get(uid) || [];
+    const overlapsExisting = existingWindows.some((window) => (
+      isOverlappingWindow(candidate.shift_start, candidate.shift_end, window.shift_start, window.shift_end)
+    ));
+    const overlapsAccepted = acceptedWindows.some((window) => (
+      isOverlappingWindow(candidate.shift_start, candidate.shift_end, window.shift_start, window.shift_end)
+    ));
+
+    if (overlapsExisting || overlapsAccepted) {
+      conflicts.push({
+        user_id: candidate.user_id,
+        date: candidate.shift_date,
+        start_time: candidate.start_time,
+        end_time: candidate.end_time,
+        reason: 'Overlapping shift for this user',
+      });
+      return;
+    }
+
+    if (!acceptedByUser.has(uid)) acceptedByUser.set(uid, []);
+    acceptedByUser.get(uid).push({ shift_start: candidate.shift_start, shift_end: candidate.shift_end });
+    filteredToInsert.push(candidate);
+  });
+
+  let created = 0;
+
+  if (filteredToInsert.length === 0) {
+    return sendSuccess(
+      res,
+      `${created} rota entries created, ${conflicts.length} skipped (duplicates/overlaps)`,
+      {
+        created,
+        skipped: conflicts.length,
+        conflicts,
+      },
+      201
+    );
+  }
+
+  const result = await Rota.insertMany(filteredToInsert, { ordered: false }).catch((err) => {
     if (err.name === 'MongoBulkWriteError' || err.code === 11000) {
       created = err.result?.nInserted ?? err.insertedDocs?.length ?? 0;
       (err.writeErrors || []).forEach((we) => {
-        const doc = we.err?.op || we.op || toInsert[we.index];
+        const doc = we.err?.op || we.op || filteredToInsert[we.index];
         if (doc) {
           conflicts.push({
             user_id: doc.user_id,
             date: doc.shift_date,
             start_time: doc.start_time,
+            end_time: doc.end_time,
             reason: 'Duplicate entry (user already has this shift)',
           });
         }
@@ -351,7 +472,7 @@ const bulkCreate = asyncHandler(async (req, res) => {
 
   return sendSuccess(
     res,
-    `${created} rota entries created, ${conflicts.length} skipped (duplicates)`,
+    `${created} rota entries created, ${conflicts.length} skipped (duplicates/overlaps)`,
     {
       created,
       skipped: conflicts.length,

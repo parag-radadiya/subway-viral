@@ -60,6 +60,11 @@
             "key": "query_id",
             "value": "",
             "type": "string"
+        },
+        {
+            "key": "week_start",
+            "value": "2026-03-16",
+            "type": "string"
         }
     ],
     "auth": {
@@ -710,6 +715,23 @@
                     }
                 },
                 {
+                    "name": "Get Rota by ID",
+                    "request": {
+                        "method": "GET",
+                        "url": {
+                            "raw": "{{base_url}}/api/rotas/{{rota_id}}",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "rotas",
+                                "{{rota_id}}"
+                            ]
+                        }
+                    }
+                },
+                {
                     "name": "Create Rota",
                     "event": [
                         {
@@ -744,6 +766,154 @@
                             "path": [
                                 "api",
                                 "rotas"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "Update Rota",
+                    "request": {
+                        "method": "PUT",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"shift_start\": \"2026-03-15T10:00:00.000Z\",\n  \"shift_end\": \"2026-03-15T18:00:00.000Z\",\n  \"note\": \"Updated by manager\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{base_url}}/api/rotas/{{rota_id}}",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "rotas",
+                                "{{rota_id}}"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "Delete Rota",
+                    "request": {
+                        "method": "DELETE",
+                        "url": {
+                            "raw": "{{base_url}}/api/rotas/{{rota_id}}",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "rotas",
+                                "{{rota_id}}"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "Bulk Create Rotas",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"shop_id\": \"{{shop_id}}\",\n  \"week_start\": \"{{week_start}}\",\n  \"days\": [0, 1, 2, 3, 4],\n  \"replace_existing\": false,\n  \"assignments\": [\n    {\n      \"user_id\": \"{{user_id}}\",\n      \"start_time\": \"09:00\",\n      \"end_time\": \"17:00\",\n      \"note\": \"Main shift\"\n    }\n  ]\n}"
+                        },
+                        "url": {
+                            "raw": "{{base_url}}/api/rotas/bulk",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "rotas",
+                                "bulk"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "Get Week View",
+                    "request": {
+                        "method": "GET",
+                        "url": {
+                            "raw": "{{base_url}}/api/rotas/week?week_start={{week_start}}&shop_id={{shop_id}}",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "rotas",
+                                "week"
+                            ],
+                            "query": [
+                                {
+                                    "key": "week_start",
+                                    "value": "{{week_start}}"
+                                },
+                                {
+                                    "key": "shop_id",
+                                    "value": "{{shop_id}}"
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "Clear Week Rotas",
+                    "request": {
+                        "method": "DELETE",
+                        "url": {
+                            "raw": "{{base_url}}/api/rotas/week?week_start={{week_start}}&shop_id={{shop_id}}",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "rotas",
+                                "week"
+                            ],
+                            "query": [
+                                {
+                                    "key": "week_start",
+                                    "value": "{{week_start}}"
+                                },
+                                {
+                                    "key": "shop_id",
+                                    "value": "{{shop_id}}"
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "Get Rota Dashboard",
+                    "request": {
+                        "method": "GET",
+                        "url": {
+                            "raw": "{{base_url}}/api/rotas/dashboard?week_start={{week_start}}",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "rotas",
+                                "dashboard"
+                            ],
+                            "query": [
+                                {
+                                    "key": "week_start",
+                                    "value": "{{week_start}}"
+                                }
                             ]
                         }
                     }
@@ -899,7 +1069,7 @@
                     }
                 },
                 {
-                    "name": "Get All Attendance Records",
+                    "name": "Get Attendance (Admin/Root - all)",
                     "request": {
                         "method": "GET",
                         "url": {
@@ -910,6 +1080,50 @@
                             "path": [
                                 "api",
                                 "attendance"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "Get Attendance (Manager/Sub-Manager - assigned shop filter)",
+                    "request": {
+                        "method": "GET",
+                        "url": {
+                            "raw": "{{base_url}}/api/attendance?shop_id={{shop_id}}",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "attendance"
+                            ],
+                            "query": [
+                                {
+                                    "key": "shop_id",
+                                    "value": "{{shop_id}}"
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "Get Attendance (Employee - self view)",
+                    "request": {
+                        "method": "GET",
+                        "url": {
+                            "raw": "{{base_url}}/api/attendance?user_id={{user_id}}",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "attendance"
+                            ],
+                            "query": [
+                                {
+                                    "key": "user_id",
+                                    "value": "{{user_id}}"
+                                }
                             ]
                         }
                     }

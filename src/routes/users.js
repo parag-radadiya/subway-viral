@@ -69,6 +69,7 @@ router.put('/me/device', protect, updateOwnDevice);
  *   get:
  *     summary: List all active users
  *     tags: [Users]
+ *     parameters:
  *     responses:
  *       200:
  *         description: List of users
@@ -87,13 +88,13 @@ router.put('/me/device', protect, updateOwnDevice);
  *       400:
  *         description: Email already in use
  */
-router.get('/', protect, requirePermission('can_view_all_staff'), getUsers);
+router.get('/', protect, getUsers);
 router.post('/', protect, requirePermission('can_create_users'), createUser);
 
 router.get('/assigned-shops/staff-summary', protect, getAssignedShopsStaffSummary);
 
 /**
- * @swagger
+router.get('/', protect, requirePermission('can_view_all_staff'), getUsers);
  * /api/users/{id}:
  *   get:
  *     summary: Get user by ID
@@ -139,8 +140,8 @@ router.get('/assigned-shops/staff-summary', protect, getAssignedShopsStaffSummar
  *       200:
  *         description: User deactivated
  */
-router.get('/:id', protect, requirePermission('can_view_all_staff'), getUser);
+router.get('/:id', protect, getUser);
 router.put('/:id', protect, requirePermission('can_create_users'), updateUser);
-router.delete('/:id', protect, requirePermission('can_create_users'), deleteUser);
+router.get('/:id', protect, requirePermission('can_view_all_staff'), getUser);
 
 module.exports = router;

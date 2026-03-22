@@ -40,7 +40,7 @@ describe('Rota module integration', () => {
         days: [0, 1],
         assignments: [
           {
-            user_id: fixtures.users.staffUser._id.toString(),
+            user_id: fixtures.users.managerUser._id.toString(),
             start_time: '08:00',
             end_time: '16:00',
           },
@@ -430,6 +430,90 @@ describe('Rota module integration', () => {
     expect(res.body.data.rota.shift_end).toBeTruthy();
     expect(res.body.data.rota.start_time).toBe('09:00');
     expect(res.body.data.rota.end_time).toBe('17:00');
+  });
+
+  it('ROTA-021: blocks overlapping single rota for the same user', async () => {
+    const managerLogin = await login('manager@org.com', 'Manager@1234');
+
+    const firstRes = await request(app)
+      .post('/api/rotas')
+      .set('Authorization', `Bearer ${managerLogin.token}`)
+      .send({
+        user_id: fixtures.users.staffUser._id.toString(),
+        shop_id: fixtures.shops.mainShop._id.toString(),
+        shift_start: '2026-03-30T08:00:00.000Z',
+        shift_end: '2026-03-30T12:00:00.000Z',
+      });
+    expectEnvelope(firstRes, 201);
+
+    const overlapRes = await request(app)
+      .post('/api/rotas')
+      .set('Authorization', `Bearer ${managerLogin.token}`)
+      .send({
+        user_id: fixtures.users.staffUser._id.toString(),
+        shop_id: fixtures.shops.mainShop._id.toString(),
+        shift_start: '2026-03-30T09:00:00.000Z',
+        shift_end: '2026-03-30T12:00:00.000Z',
+      });
+
+    expectEnvelope(overlapRes, 409);
+  });
+
+  it('ROTA-022: allows adjacent non-overlapping shifts for the same user', async () => {
+    const managerLogin = await login('manager@org.com', 'Manager@1234');
+
+    const firstRes = await request(app)
+      .post('/api/rotas')
+      .set('Authorization', `Bearer ${managerLogin.token}`)
+      .send({
+        user_id: fixtures.users.staffUser._id.toString(),
+        shop_id: fixtures.shops.mainShop._id.toString(),
+        shift_start: '2026-03-31T08:00:00.000Z',
+        shift_end: '2026-03-31T12:00:00.000Z',
+      });
+    expectEnvelope(firstRes, 201);
+
+    const adjacentRes = await request(app)
+      .post('/api/rotas')
+      .set('Authorization', `Bearer ${managerLogin.token}`)
+      .send({
+        user_id: fixtures.users.staffUser._id.toString(),
+        shop_id: fixtures.shops.mainShop._id.toString(),
+        shift_start: '2026-03-31T12:00:00.000Z',
+        shift_end: '2026-03-31T16:00:00.000Z',
+      });
+
+    expectEnvelope(adjacentRes, 201);
+  });
+
+  it('ROTA-023: bulk create skips overlapping assignments for the same user', async () => {
+    const managerLogin = await login('manager@org.com', 'Manager@1234');
+
+    const res = await request(app)
+      .post('/api/rotas/bulk')
+      .set('Authorization', `Bearer ${managerLogin.token}`)
+      .send({
+        shop_id: fixtures.shops.mainShop._id.toString(),
+        week_start: '2026-04-06',
+        days: [0],
+        assignments: [
+          {
+            user_id: fixtures.users.staffUser._id.toString(),
+            start_time: '08:00',
+            end_time: '12:00',
+          },
+          {
+            user_id: fixtures.users.staffUser._id.toString(),
+            start_time: '09:00',
+            end_time: '12:00',
+          },
+        ],
+      });
+
+    expectEnvelope(res, 201);
+    expect(res.body.data.created).toBe(1);
+    expect(res.body.data.skipped).toBe(1);
+    expect(res.body.data.conflicts[0].reason).toContain('Overlapping shift');
   });
 });
 
