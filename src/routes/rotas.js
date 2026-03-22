@@ -24,9 +24,14 @@ const { requirePermission } = require('../middleware/permMiddleware');
  *     tags: [Rotas]
  *     description: |
  *       Assigns a list of employees to a shop for selected days within a given ISO week.
+ *       
+ *       **Usage modes:**
+ *       1. **Time pattern mode** (default): Provide `start_time` and `end_time` as HH:MM. They are applied to **all selected days**.
+ *       2. **Specific date mode**: Provide full ISO datetimes (e.g., "2026-03-16T09:00:00.000Z"). Each assignment is applied only to the day matching that date.
+ *       
  *       - `days`: 0 = Monday, 1 = Tuesday … 6 = Sunday
- *       - `assignments`: list of employees + their shift times — applied to **every selected day**
- *       - Duplicate detection: same user + shift_start is rejected (split shifts are allowed)
+ *       - `assignments`: list of employees + their shift times
+ *       - Duplicate detection: same user + time overlap is rejected (split shifts are allowed if times don't overlap)
  *       - `replace_existing: true` wipes those users' full week before re-inserting (use for re-publishing)
  *     requestBody:
  *       required: true
@@ -37,19 +42,20 @@ const { requirePermission } = require('../middleware/permMiddleware');
  *           example:
  *             shop_id: "64abc000000000000000001"
  *             week_start: "2026-03-16"
- *             days: [0, 1, 2, 3, 4]
+ *             days: [0, 1, 2, 3, 4, 5, 6]
  *             replace_existing: false
  *             assignments:
  *               - user_id: "64abc000000000000000002"
  *                 start_time: "09:00"
  *                 end_time: "17:00"
  *               - user_id: "64abc000000000000000003"
- *                 start_time: "14:00"
- *                 end_time: "22:00"
+ *                 start_time: "2026-03-17T14:00:00.000Z"
+ *                 end_time: "2026-03-17T22:00:00.000Z"
+ *                 note: "Tuesday only"
  *               - user_id: "64abc000000000000000002"
  *                 start_time: "20:00"
  *                 end_time: "23:30"
- *                 note: "Evening split shift"
+ *                 note: "Evening split shift (all selected days)"
  *     responses:
  *       201:
  *         description: Bulk result with created count and any conflicts

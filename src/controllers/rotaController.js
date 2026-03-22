@@ -44,6 +44,18 @@ function normalizeTimeToHHMM(value) {
   return `${String(parsed.getUTCHours()).padStart(2, '0')}:${String(parsed.getUTCMinutes()).padStart(2, '0')}`;
 }
 
+function extractDateFromISO(isoString) {
+  try {
+    const parsed = new Date(isoString);
+    if (Number.isNaN(parsed.getTime())) return null;
+    const d = new Date(parsed);
+    d.setUTCHours(0, 0, 0, 0);
+    return d;
+  } catch {
+    return null;
+  }
+}
+
 function normalizeBulkAssignments(assignments) {
   return assignments.map((assignment, idx) => {
     if (!assignment?.user_id) {
@@ -66,10 +78,15 @@ function normalizeBulkAssignments(assignments) {
       );
     }
 
+    // Check if the original start_time includes a specific date (ISO format with date)
+    // If so, extract that date to only apply this assignment to that specific day
+    const specificDate = extractDateFromISO(String(assignment.start_time));
+
     return {
       ...assignment,
       start_time: startTime,
       end_time: endTime,
+      specificDate, // null if time-only pattern, or a Date if specific date was provided
     };
   });
 }
@@ -353,6 +370,13 @@ const bulkCreate = asyncHandler(async (req, res) => {
   const toInsert = [];
   for (const date of dates) {
     for (const assignment of normalizedAssignments) {
+      // If the assignment has a specific date, only apply it to that date
+      if (assignment.specificDate) {
+        if (date.getTime() !== assignment.specificDate.getTime()) {
+          continue; // Skip this assignment for this date
+        }
+      }
+
       const shiftStart = combineDateAndTime(date, assignment.start_time);
       const shiftEnd = combineDateAndTime(date, assignment.end_time);
       if (!shiftStart || !shiftEnd || shiftEnd <= shiftStart) {
