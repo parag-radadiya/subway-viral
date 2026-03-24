@@ -8,7 +8,14 @@
     "seed": "node src/config/seed.js",
     "test": "jest --runInBand",
     "test:watch": "jest --watch",
-    "test:ci": "jest --runInBand --coverage"
+    "test:ci": "jest --runInBand --coverage",
+    "test:coverage": "jest --runInBand --coverage",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier . --write",
+    "format:check": "prettier . --check",
+    "quality:check": "npm run lint && npm run format:check && npm run test:coverage",
+    "prepare": "husky"
   },
   "keywords": [],
   "author": "",
@@ -28,9 +35,26 @@
     "swagger-ui-express": "^5.0.1"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "eslint": "^9.39.4",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-jest": "^28.14.0",
+    "globals": "^17.4.0",
+    "husky": "^9.1.7",
     "jest": "^30.2.0",
+    "lint-staged": "^16.4.0",
     "mongodb-memory-server": "^10.3.0",
     "nodemon": "^3.1.14",
+    "prettier": "^3.8.1",
     "supertest": "^7.1.4"
+  },
+  "lint-staged": {
+    "*.{js,json,md,yml,yaml}": [
+      "prettier --write"
+    ],
+    "*.js": [
+      "eslint --fix",
+      "jest --bail --findRelatedTests --passWithNoTests"
+    ]
   }
 }

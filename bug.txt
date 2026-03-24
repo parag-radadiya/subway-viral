@@ -13,3 +13,5 @@ get all users by shop and skip root and admin
 
 my rota - for employee to view their own rota, for sub manager and manager to view rotas of their assigned shops, and for admin to view all rotas of users.
 To implement the functionality for viewing attendance records and rotas based on user roles (admin, sub-manager, manager, and employee), you can follow the steps below:
+
+
