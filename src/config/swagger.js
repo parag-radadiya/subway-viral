@@ -26,7 +26,10 @@ const options = {
       },
     },
     servers: [
-      { url: serverUrl, description: process.env.VERCEL_URL ? 'Vercel deployment' : 'Local development' },
+      {
+        url: serverUrl,
+        description: process.env.VERCEL_URL ? 'Vercel deployment' : 'Local development',
+      },
     ],
     components: {
       securitySchemes: {
@@ -55,11 +58,22 @@ const options = {
             data: {
               type: 'object',
               properties: {
-                token: { type: 'string' },
+                token: { type: 'string', description: 'Backward-compatible alias of access_token' },
+                access_token: { type: 'string' },
+                refresh_token: { type: 'string' },
+                refresh_token_expires_at: { type: 'string', format: 'date-time' },
                 must_change_password: { type: 'boolean' },
+                needs_device_registration: { type: 'boolean' },
                 user: { $ref: '#/components/schemas/UserPublic' },
               },
             },
+          },
+        },
+        RefreshTokenRequest: {
+          type: 'object',
+          required: ['refresh_token'],
+          properties: {
+            refresh_token: { type: 'string' },
           },
         },
 
@@ -154,7 +168,11 @@ const options = {
             user_id: { $ref: '#/components/schemas/UserPublic' },
             shop_id: { $ref: '#/components/schemas/Shop' },
             shift_date: { type: 'string', format: 'date' },
-            shift_start: { type: 'string', format: 'date-time', example: '2026-03-16T09:00:00.000Z' },
+            shift_start: {
+              type: 'string',
+              format: 'date-time',
+              example: '2026-03-16T09:00:00.000Z',
+            },
             shift_end: { type: 'string', format: 'date-time', example: '2026-03-16T17:00:00.000Z' },
             start_time: { type: 'string', example: '09:00' },
             end_time: { type: 'string', example: '17:00' },
@@ -180,7 +198,12 @@ const options = {
           required: ['shop_id', 'week_start', 'days', 'assignments'],
           properties: {
             shop_id: { type: 'string' },
-            week_start: { type: 'string', format: 'date', example: '2026-03-16', description: 'Any date — snapped to that ISO week Monday' },
+            week_start: {
+              type: 'string',
+              format: 'date',
+              example: '2026-03-16',
+              description: 'Any date — snapped to that ISO week Monday',
+            },
             days: {
               type: 'array',
               items: { type: 'integer', minimum: 0, maximum: 6 },
@@ -189,7 +212,8 @@ const options = {
             },
             assignments: {
               type: 'array',
-              description: 'Each assignment is applied to every selected day. Multiple entries for same user = split shifts.',
+              description:
+                'Each assignment is applied to every selected day. Multiple entries for same user = split shifts.',
               items: {
                 type: 'object',
                 required: ['user_id', 'start_time'],
@@ -204,7 +228,8 @@ const options = {
             replace_existing: {
               type: 'boolean',
               default: false,
-              description: 'If true: delete the specified users\' full week first, then re-insert. Use to re-publish a week.',
+              description:
+                "If true: delete the specified users' full week first, then re-insert. Use to re-publish a week.",
             },
           },
         },
@@ -217,7 +242,10 @@ const options = {
               type: 'object',
               properties: {
                 created: { type: 'integer', description: 'Number of new rota records inserted' },
-                skipped: { type: 'integer', description: 'Number of entries skipped due to conflicts' },
+                skipped: {
+                  type: 'integer',
+                  description: 'Number of entries skipped due to conflicts',
+                },
                 conflicts: {
                   type: 'array',
                   items: {
@@ -247,7 +275,8 @@ const options = {
                 shop_id: { type: 'string' },
                 days: {
                   type: 'object',
-                  description: 'Keys are day labels (e.g. "Mon 16 Mar"), values are arrays of Rota records',
+                  description:
+                    'Keys are day labels (e.g. "Mon 16 Mar"), values are arrays of Rota records',
                   additionalProperties: {
                     type: 'array',
                     items: { $ref: '#/components/schemas/Rota' },
@@ -317,8 +346,11 @@ const options = {
             _id: { type: 'string' },
             user_id: { $ref: '#/components/schemas/UserPublic' },
             shop_id: { $ref: '#/components/schemas/Shop' },
+            rota_id: { $ref: '#/components/schemas/Rota' },
             punch_in: { type: 'string', format: 'date-time' },
             punch_out: { type: 'string', format: 'date-time' },
+            auto_punch_out_at: { type: 'string', format: 'date-time' },
+            punch_out_source: { type: 'string', enum: ['Manual', 'Auto'] },
             is_manual: { type: 'boolean' },
             manual_by: { $ref: '#/components/schemas/UserPublic' },
             punch_method: { type: 'string', enum: ['GPS+Biometric', 'Manual'] },
@@ -340,6 +372,11 @@ const options = {
             shop_id: { type: 'string' },
             location_token: { type: 'string' },
             biometric_verified: { type: 'boolean', example: true },
+            rota_id: {
+              type: 'string',
+              description:
+                'Optional explicit rota selection. If omitted, backend auto-selects eligible rota.',
+            },
           },
         },
         ManualPunchInRequest: {
@@ -348,6 +385,10 @@ const options = {
           properties: {
             user_id: { type: 'string' },
             shop_id: { type: 'string' },
+            rota_id: {
+              type: 'string',
+              description: 'Optional explicit rota selection for manual attendance punch-in.',
+            },
           },
         },
 

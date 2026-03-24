@@ -3,11 +3,7 @@ const app = require('../../src/app');
 const { expectEnvelope } = require('../helpers/assertions');
 const { login } = require('../helpers/auth');
 const { seedTestData } = require('../helpers/seedTestData');
-const {
-  connectSandboxDb,
-  clearSandboxDb,
-  disconnectSandboxDb,
-} = require('../setup/testDb');
+const { connectSandboxDb, clearSandboxDb, disconnectSandboxDb } = require('../setup/testDb');
 
 describe('Rota bulk create with specific dates', () => {
   let fixtures;
@@ -33,20 +29,20 @@ describe('Rota bulk create with specific dates', () => {
       .set('Authorization', `Bearer ${managerLogin.token}`)
       .send({
         shop_id: fixtures.shops.mainShop._id.toString(),
-        week_start: '2026-03-16',
+        week_start: '2026-03-23',
         days: [0, 1, 2, 3, 4, 5, 6], // All 7 days
         replace_existing: false,
         assignments: [
           {
             user_id: fixtures.users.staffUser._id.toString(),
-            start_time: '2026-03-16T09:00:00.000Z',
-            end_time: '2026-03-16T17:00:00.000Z',
+            start_time: '2026-03-23T09:00:00.000Z',
+            end_time: '2026-03-23T17:00:00.000Z',
             note: 'Monday only',
           },
           {
             user_id: fixtures.users.staffUser._id.toString(),
-            start_time: '2026-03-17T09:00:00.000Z',
-            end_time: '2026-03-17T17:00:00.000Z',
+            start_time: '2026-03-24T09:00:00.000Z',
+            end_time: '2026-03-24T17:00:00.000Z',
             note: 'Tuesday only',
           },
         ],
@@ -68,7 +64,7 @@ describe('Rota bulk create with specific dates', () => {
       .set('Authorization', `Bearer ${managerLogin.token}`)
       .send({
         shop_id: fixtures.shops.mainShop._id.toString(),
-        week_start: '2026-03-16',
+        week_start: '2026-03-23',
         days: [0, 1, 2], // Mon, Tue, Wed
         replace_existing: false,
         assignments: [
@@ -95,14 +91,14 @@ describe('Rota bulk create with specific dates', () => {
       .set('Authorization', `Bearer ${managerLogin.token}`)
       .send({
         shop_id: fixtures.shops.mainShop._id.toString(),
-        week_start: '2026-03-16',
+        week_start: '2026-03-23',
         days: [0, 1, 2, 3, 4, 5, 6],
         replace_existing: false,
         assignments: [
           {
             user_id: fixtures.users.staffUser._id.toString(),
-            start_time: '2026-03-16T09:00:00.000Z', // Monday only
-            end_time: '2026-03-16T17:00:00.000Z',
+            start_time: '2026-03-23T09:00:00.000Z', // Monday only
+            end_time: '2026-03-23T17:00:00.000Z',
           },
           {
             user_id: fixtures.users.managerUser._id.toString(),
@@ -118,4 +114,3 @@ describe('Rota bulk create with specific dates', () => {
     expect(res.body.data.skipped).toBe(0);
   });
 });
-

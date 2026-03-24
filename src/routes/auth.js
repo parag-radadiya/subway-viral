@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { login } = require('../controllers/authController');
+const { login, refreshAccessToken, logout } = require('../controllers/authController');
 const { loginRateLimiter } = require('../middleware/loginRateLimitMiddleware');
 
 /**
@@ -44,5 +44,37 @@ const { loginRateLimiter } = require('../middleware/loginRateLimitMiddleware');
  *               $ref: '#/components/schemas/ErrorResponse'
  */
 router.post('/login', loginRateLimiter, login);
+
+/**
+ * @swagger
+ * /api/auth/refresh-token:
+ *   post:
+ *     summary: Refresh access token using refresh token (rotates refresh token)
+ *     tags: [Auth]
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/RefreshTokenRequest'
+ */
+router.post('/refresh-token', refreshAccessToken);
+
+/**
+ * @swagger
+ * /api/auth/logout:
+ *   post:
+ *     summary: Revoke refresh token and logout session
+ *     tags: [Auth]
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/RefreshTokenRequest'
+ */
+router.post('/logout', logout);
 
 module.exports = router;

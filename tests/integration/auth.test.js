@@ -3,11 +3,7 @@ const app = require('../../src/app');
 const User = require('../../src/models/User');
 const { expectEnvelope } = require('../helpers/assertions');
 const { seedTestData } = require('../helpers/seedTestData');
-const {
-  connectSandboxDb,
-  clearSandboxDb,
-  disconnectSandboxDb,
-} = require('../setup/testDb');
+const { connectSandboxDb, clearSandboxDb, disconnectSandboxDb } = require('../setup/testDb');
 
 describe('Auth and onboarding integration', () => {
   let fixtures;
@@ -32,6 +28,8 @@ describe('Auth and onboarding integration', () => {
 
     expectEnvelope(res, 200);
     expect(res.body.data.token).toBeTruthy();
+    expect(res.body.data.access_token).toBeTruthy();
+    expect(res.body.data.refresh_token).toBeTruthy();
     expect(res.body.data.user.email).toBe('root@org.com');
     expect(res.body.data.user.active_shop_id).toBeTruthy();
     expect(res.body.data.needs_device_registration).toBe(false);
@@ -39,9 +37,7 @@ describe('Auth and onboarding integration', () => {
   });
 
   it('AUTH-002: rejects missing login fields', async () => {
-    const res = await request(app)
-      .post('/api/auth/login')
-      .send({ email: 'root@org.com' });
+    const res = await request(app).post('/api/auth/login').send({ email: 'root@org.com' });
 
     expectEnvelope(res, 400);
   });
@@ -99,7 +95,11 @@ describe('Auth and onboarding integration', () => {
     const res = await request(app)
       .put('/api/users/me/password')
       .set('Authorization', `Bearer ${loginRes.body.data.token}`)
-      .send({ currentPassword: 'Wrong@1234', newPassword: 'Manager@1234_new', device_id: 'Test123' });
+      .send({
+        currentPassword: 'Wrong@1234',
+        newPassword: 'Manager@1234_new',
+        device_id: 'Test123',
+      });
 
     expectEnvelope(res, 401);
   });
@@ -129,6 +129,43 @@ describe('Auth and onboarding integration', () => {
     const res = await request(app).get('/api/this-route-does-not-exist');
     expectEnvelope(res, 404);
   });
+
+  it('AUTH-009: refresh token rotates access and refresh tokens', async () => {
+    const loginRes = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'manager@org.com', password: 'Manager@1234' });
+
+    expectEnvelope(loginRes, 200);
+    const previousRefresh = loginRes.body.data.refresh_token;
+
+    const refreshRes = await request(app)
+      .post('/api/auth/refresh-token')
+      .send({ refresh_token: previousRefresh });
+
+    expectEnvelope(refreshRes, 200);
+    expect(refreshRes.body.data.access_token).toBeTruthy();
+    expect(refreshRes.body.data.refresh_token).toBeTruthy();
+    expect(refreshRes.body.data.refresh_token).not.toBe(previousRefresh);
+  });
+
+  it('AUTH-010: logout revokes refresh token', async () => {
+    const loginRes = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'manager@org.com', password: 'Manager@1234' });
+
+    expectEnvelope(loginRes, 200);
+    const refreshToken = loginRes.body.data.refresh_token;
+
+    const logoutRes = await request(app)
+      .post('/api/auth/logout')
+      .send({ refresh_token: refreshToken });
+
+    expectEnvelope(logoutRes, 200);
+
+    const refreshAgain = await request(app)
+      .post('/api/auth/refresh-token')
+      .send({ refresh_token: refreshToken });
+
+    expectEnvelope(refreshAgain, 401);
+  });
 });
-
-

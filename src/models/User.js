@@ -48,29 +48,33 @@ const userSchema = new mongoose.Schema(
       ref: 'Shop',
       default: null,
     },
-    assigned_shop_ids: [{
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Shop',
-    }],
-    shop_history: [{
-      shop_id: {
+    assigned_shop_ids: [
+      {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Shop',
       },
-      changed_at: {
-        type: Date,
-        default: Date.now,
+    ],
+    shop_history: [
+      {
+        shop_id: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'Shop',
+        },
+        changed_at: {
+          type: Date,
+          default: Date.now,
+        },
+        changed_by: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'User',
+          default: null,
+        },
+        note: {
+          type: String,
+          maxlength: 200,
+        },
       },
-      changed_by: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',
-        default: null,
-      },
-      note: {
-        type: String,
-        maxlength: 200,
-      },
-    }],
+    ],
     is_active: {
       type: Boolean,
       default: true,
@@ -78,6 +82,16 @@ const userSchema = new mongoose.Schema(
     must_change_password: {
       type: Boolean,
       default: true, // Admin-created users must change on first login
+    },
+    refresh_token_hash: {
+      type: String,
+      default: null,
+      select: false,
+    },
+    refresh_token_expires_at: {
+      type: Date,
+      default: null,
+      select: false,
     },
   },
   { timestamps: true }
@@ -93,9 +107,7 @@ userSchema.pre('save', async function () {
 
 userSchema.pre('validate', function () {
   const assignedRaw = Array.isArray(this.assigned_shop_ids) ? this.assigned_shop_ids : [];
-  const assigned = assignedRaw
-    .filter(Boolean)
-    .map((id) => id.toString());
+  const assigned = assignedRaw.filter(Boolean).map((id) => id.toString());
 
   if (!this.active_shop_id && this.shop_id) {
     this.active_shop_id = this.shop_id;

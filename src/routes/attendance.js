@@ -1,7 +1,14 @@
 const express = require('express');
 const router = express.Router();
 const {
-  verifyLocation, punchIn, punchOut, manualPunchIn, getAttendance,
+  verifyLocation,
+  punchIn,
+  punchOut,
+  manualPunchIn,
+  getAttendance,
+  getEligibleRotas,
+  reconcileAllOverdue,
+  reconcileSelfOverdue,
 } = require('../controllers/attendanceController');
 const { protect } = require('../middleware/authMiddleware');
 const { requirePermission } = require('../middleware/permMiddleware');
@@ -98,6 +105,60 @@ router.post('/verify-location', protect, validateGeofence, verifyLocation);
  *               $ref: '#/components/schemas/ErrorResponse'
  */
 router.post('/punch-in', protect, punchIn);
+
+/**
+ * @swagger
+ * /api/attendance/eligible-rotas:
+ *   get:
+ *     summary: Fetch rotas eligible for immediate punch-in (current user)
+ *     tags: [Attendance]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: shop_id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Shop where user wants to punch in
+ *     responses:
+ *       200:
+ *         description: Eligible rota list
+ */
+router.get('/eligible-rotas', protect, getEligibleRotas);
+
+/**
+ * @swagger
+ * /api/attendance/reconcile-overdue:
+ *   post:
+ *     summary: Admin/manager trigger to reconcile overdue auto punch-outs for all users
+ *     tags: [Attendance]
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Reconciliation completed
+ */
+router.post(
+  '/reconcile-overdue',
+  protect,
+  requirePermission('can_view_all_staff'),
+  reconcileAllOverdue
+);
+
+/**
+ * @swagger
+ * /api/attendance/reconcile-self:
+ *   post:
+ *     summary: Reconcile overdue auto punch-outs for current user only
+ *     tags: [Attendance]
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Self reconciliation completed
+ */
+router.post('/reconcile-self', protect, reconcileSelfOverdue);
 
 /**
  * @swagger
