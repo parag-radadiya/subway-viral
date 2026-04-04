@@ -1,7 +1,13 @@
 const express = require('express');
 const router = express.Router();
 const {
-  getShops, getShop, createShop, updateShop, deleteShop,
+  getShops,
+  getShop,
+  createShop,
+  updateShop,
+  updateShopHours,
+  getShopHoursHistory,
+  deleteShop,
 } = require('../controllers/shopController');
 const { protect } = require('../middleware/authMiddleware');
 const { requirePermission } = require('../middleware/permMiddleware');
@@ -19,6 +25,15 @@ const { requirePermission } = require('../middleware/permMiddleware');
  *   get:
  *     summary: List all shops
  *     tags: [Shops]
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
  *     responses:
  *       200:
  *         description: List of shops
@@ -84,6 +99,53 @@ router.post('/', protect, requirePermission('can_manage_shops'), createShop);
  *         description: Deleted
  */
 router.get('/:id', protect, getShop);
+/**
+ * @swagger
+ * /api/shops/{id}/hours:
+ *   put:
+ *     summary: Update shop opening and closing time
+ *     tags: [Shops]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Shop hours updated
+ */
+/**
+ * @swagger
+ * /api/shops/{id}/hours-history:
+ *   get:
+ *     summary: Get paginated shop-hours change history
+ *     tags: [Shops]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Shop hours history
+ */
+router.get(
+  '/:id/hours-history',
+  protect,
+  requirePermission('can_manage_shops'),
+  getShopHoursHistory
+);
+router.put('/:id/hours', protect, requirePermission('can_manage_shops'), updateShopHours);
 router.put('/:id', protect, requirePermission('can_manage_shops'), updateShop);
 router.delete('/:id', protect, requirePermission('can_manage_shops'), deleteShop);
 

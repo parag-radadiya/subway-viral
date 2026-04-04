@@ -49,6 +49,43 @@ const attendanceSchema = new mongoose.Schema(
       enum: ['GPS+Biometric', 'Manual'],
       required: true,
     },
+    adjusted_minutes: {
+      type: Number,
+      default: null,
+      min: 0,
+    },
+    adjusted_at: {
+      type: Date,
+      default: null,
+    },
+    adjusted_by: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    adjustment_note: {
+      type: String,
+      maxlength: 300,
+      default: null,
+    },
+    effective_start: {
+      type: Date,
+      default: null,
+    },
+    effective_end: {
+      type: Date,
+      default: null,
+    },
+    effective_minutes: {
+      type: Number,
+      default: null,
+      min: 0,
+    },
+    effective_source: {
+      type: String,
+      enum: ['Actual', 'Adjusted'],
+      default: null,
+    },
   },
   { timestamps: true }
 );

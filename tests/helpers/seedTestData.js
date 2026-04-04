@@ -16,6 +16,7 @@ const seedTestData = async () => {
         can_manage_inventory: true,
         can_manage_shops: true,
         can_manage_roles: true,
+        can_adjust_attendance_hours: true,
       },
     },
     {
@@ -28,6 +29,7 @@ const seedTestData = async () => {
         can_manage_inventory: true,
         can_manage_shops: true,
         can_manage_roles: false,
+        can_adjust_attendance_hours: true,
       },
     },
     {
@@ -40,6 +42,7 @@ const seedTestData = async () => {
         can_manage_inventory: true,
         can_manage_shops: false,
         can_manage_roles: false,
+        can_adjust_attendance_hours: false,
       },
     },
     {
@@ -52,6 +55,7 @@ const seedTestData = async () => {
         can_manage_inventory: true,
         can_manage_shops: false,
         can_manage_roles: false,
+        can_adjust_attendance_hours: false,
       },
     },
     {
@@ -64,6 +68,7 @@ const seedTestData = async () => {
         can_manage_inventory: false,
         can_manage_shops: false,
         can_manage_roles: false,
+        can_adjust_attendance_hours: false,
       },
     },
   ]);
@@ -80,12 +85,16 @@ const seedTestData = async () => {
       latitude: 51.5074,
       longitude: -0.1278,
       geofence_radius_m: 150,
+      opening_time: '08:00',
+      closing_time: '22:00',
     },
     {
       name: 'East Branch',
       latitude: 51.5155,
       longitude: -0.0922,
       geofence_radius_m: 100,
+      opening_time: '08:00',
+      closing_time: '22:00',
     },
   ]);
 
@@ -93,70 +102,80 @@ const seedTestData = async () => {
   const eastShop = shops[1];
 
   const users = [];
-  users.push(await User.create({
-    name: 'System Root',
-    email: 'root@org.com',
-    phone_code: '+44',
-    phone_num: '7000000000',
-    password_hash: 'Root@1234',
-    role_id: rootRole._id,
-    device_id: 'root-device-001',
-    shop_id: mainShop._id,
-    assigned_shop_ids: [mainShop._id, eastShop._id],
-    must_change_password: false,
-  }));
+  users.push(
+    await User.create({
+      name: 'System Root',
+      email: 'root@org.com',
+      phone_code: '+44',
+      phone_num: '7000000000',
+      password_hash: 'Root@1234',
+      role_id: rootRole._id,
+      device_id: 'root-device-001',
+      shop_id: mainShop._id,
+      assigned_shop_ids: [mainShop._id, eastShop._id],
+      must_change_password: false,
+    })
+  );
 
-  users.push(await User.create({
-    name: 'Alice Admin',
-    email: 'admin@org.com',
-    phone_code: '+44',
-    phone_num: '7000000001',
-    password_hash: 'Admin@1234',
-    role_id: adminRole._id,
-    device_id: 'admin-device-001',
-    shop_id: mainShop._id,
-    assigned_shop_ids: [mainShop._id, eastShop._id],
-    must_change_password: true,
-  }));
+  users.push(
+    await User.create({
+      name: 'Alice Admin',
+      email: 'admin@org.com',
+      phone_code: '+44',
+      phone_num: '7000000001',
+      password_hash: 'Admin@1234',
+      role_id: adminRole._id,
+      device_id: 'admin-device-001',
+      shop_id: mainShop._id,
+      assigned_shop_ids: [mainShop._id, eastShop._id],
+      must_change_password: true,
+    })
+  );
 
-  users.push(await User.create({
-    name: 'Bob Manager',
-    email: 'manager@org.com',
-    phone_code: '+44',
-    phone_num: '7000000002',
-    password_hash: 'Manager@1234',
-    role_id: managerRole._id,
-    device_id: 'mgr-device-001',
-    shop_id: mainShop._id,
-    assigned_shop_ids: [mainShop._id, eastShop._id],
-    must_change_password: true,
-  }));
+  users.push(
+    await User.create({
+      name: 'Bob Manager',
+      email: 'manager@org.com',
+      phone_code: '+44',
+      phone_num: '7000000002',
+      password_hash: 'Manager@1234',
+      role_id: managerRole._id,
+      device_id: 'mgr-device-001',
+      shop_id: mainShop._id,
+      assigned_shop_ids: [mainShop._id, eastShop._id],
+      must_change_password: true,
+    })
+  );
 
-  users.push(await User.create({
-    name: 'Carol Sub-Manager',
-    email: 'submanager@org.com',
-    phone_code: '+44',
-    phone_num: '7000000003',
-    password_hash: 'SubMgr@1234',
-    role_id: subMgrRole._id,
-    device_id: 'submgr-device-001',
-    shop_id: mainShop._id,
-    assigned_shop_ids: [mainShop._id, eastShop._id],
-    must_change_password: true,
-  }));
+  users.push(
+    await User.create({
+      name: 'Carol Sub-Manager',
+      email: 'submanager@org.com',
+      phone_code: '+44',
+      phone_num: '7000000003',
+      password_hash: 'SubMgr@1234',
+      role_id: subMgrRole._id,
+      device_id: 'submgr-device-001',
+      shop_id: mainShop._id,
+      assigned_shop_ids: [mainShop._id, eastShop._id],
+      must_change_password: true,
+    })
+  );
 
-  users.push(await User.create({
-    name: 'Dave Staff',
-    email: 'staff@org.com',
-    phone_code: '+44',
-    phone_num: '7000000004',
-    password_hash: 'Staff@1234',
-    role_id: staffRole._id,
-    device_id: 'staff-device-001',
-    shop_id: mainShop._id,
-    assigned_shop_ids: [mainShop._id],
-    must_change_password: true,
-  }));
+  users.push(
+    await User.create({
+      name: 'Dave Staff',
+      email: 'staff@org.com',
+      phone_code: '+44',
+      phone_num: '7000000004',
+      password_hash: 'Staff@1234',
+      role_id: staffRole._id,
+      device_id: 'staff-device-001',
+      shop_id: mainShop._id,
+      assigned_shop_ids: [mainShop._id],
+      must_change_password: true,
+    })
+  );
 
   const [rootUser, adminUser, managerUser, subManagerUser, staffUser] = users;
 
@@ -202,4 +221,3 @@ const seedTestData = async () => {
 };
 
 module.exports = { seedTestData };
-

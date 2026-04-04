@@ -1,8 +1,15 @@
 const express = require('express');
 const router = express.Router();
 const {
-  getRotas, getRota, createRota, updateRota, deleteRota,
-  bulkCreate, getWeekView, clearWeek, getDashboard,
+  getRotas,
+  getRota,
+  createRota,
+  updateRota,
+  deleteRota,
+  bulkCreate,
+  getWeekView,
+  clearWeek,
+  getDashboard,
 } = require('../controllers/rotaController');
 const { protect } = require('../middleware/authMiddleware');
 const { requirePermission } = require('../middleware/permMiddleware');
@@ -24,11 +31,11 @@ const { requirePermission } = require('../middleware/permMiddleware');
  *     tags: [Rotas]
  *     description: |
  *       Assigns a list of employees to a shop for selected days within a given ISO week.
- *       
+ *
  *       **Usage modes:**
  *       1. **Time pattern mode** (default): Provide `start_time` and `end_time` as HH:MM. They are applied to **all selected days**.
  *       2. **Specific date mode**: Provide full ISO datetimes (e.g., "2026-03-16T09:00:00.000Z"). Each assignment is applied only to the day matching that date.
- *       
+ *
  *       - `days`: 0 = Monday, 1 = Tuesday … 6 = Sunday
  *       - `assignments`: list of employees + their shift times
  *       - Duplicate detection: same user + time overlap is rejected (split shifts are allowed if times don't overlap)
@@ -179,6 +186,22 @@ router.get('/dashboard', protect, requirePermission('can_view_all_staff'), getDa
  *         schema:
  *           type: string
  *         description: "Filter to exact date (YYYY-MM-DD)"
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: sort_by
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: sort_order
+ *         schema:
+ *           type: string
  *     responses:
  *       200:
  *         description: List of rota records

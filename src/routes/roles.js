@@ -1,7 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const {
-  getRoles, getRole, createRole, updateRole, deleteRole,
+  getRoles,
+  getRole,
+  createRole,
+  updateRole,
+  deleteRole,
 } = require('../controllers/roleController');
 const { protect } = require('../middleware/authMiddleware');
 const { requirePermission } = require('../middleware/permMiddleware');
@@ -19,6 +23,23 @@ const { requirePermission } = require('../middleware/permMiddleware');
  *   get:
  *     summary: List all roles
  *     tags: [Roles]
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: sort_by
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: sort_order
+ *         schema:
+ *           type: string
  *     responses:
  *       200:
  *         description: List of roles

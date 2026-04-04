@@ -89,6 +89,7 @@ const options = {
                 can_create_users: false,
                 can_view_all_staff: true,
                 can_manage_rotas: true,
+                can_adjust_attendance_hours: true,
                 can_manual_punch: true,
                 can_manage_inventory: true,
                 can_manage_shops: false,
@@ -107,6 +108,8 @@ const options = {
             latitude: { type: 'number', example: 51.5074 },
             longitude: { type: 'number', example: -0.1278 },
             geofence_radius_m: { type: 'number', example: 150 },
+            opening_time: { type: 'string', example: '08:00' },
+            closing_time: { type: 'string', example: '22:00' },
           },
         },
         ShopInput: {
@@ -117,6 +120,8 @@ const options = {
             latitude: { type: 'number' },
             longitude: { type: 'number' },
             geofence_radius_m: { type: 'number', default: 100 },
+            opening_time: { type: 'string', example: '08:00' },
+            closing_time: { type: 'string', example: '22:00' },
           },
         },
 

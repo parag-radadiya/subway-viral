@@ -3,6 +3,7 @@ const Shop = require('../models/Shop');
 const AppError = require('../utils/AppError');
 const asyncHandler = require('../utils/asyncHandler');
 const { sendSuccess } = require('../utils/response');
+const { parsePagination, toPageMeta } = require('../utils/pagination');
 const {
   buildShopScope,
   isShopAllowed,
@@ -19,9 +20,7 @@ const toId = (value) => {
 const uniqueIds = (ids) => [...new Set(ids.filter(Boolean))];
 
 const resolveShopState = ({ shop_id, active_shop_id, assigned_shop_ids }) => {
-  const assigned = Array.isArray(assigned_shop_ids)
-    ? assigned_shop_ids.map(toId)
-    : [];
+  const assigned = Array.isArray(assigned_shop_ids) ? assigned_shop_ids.map(toId) : [];
   const active = toId(active_shop_id) || toId(shop_id) || assigned[0] || null;
   const finalAssigned = uniqueIds(active ? [...assigned, active] : assigned);
   return {
@@ -61,10 +60,18 @@ const isUserReadableInScope = (scope, user) => {
 const getUsers = asyncHandler(async (req, res) => {
   const scope = buildReadScope(req.user);
   const filter = { is_active: true };
+  const { page, limit, skip, sort } = parsePagination(req.query, {
+    defaultSortBy: 'createdAt',
+    allowedSortBy: ['createdAt', 'updatedAt', 'name', 'email'],
+  });
   applyUserReadScopeFilter(filter, req, scope);
 
   if (req.query.shop_id) {
-    if (scope.mode === 'shops' && !scope.shopScope.all && !isShopAllowed(scope.shopScope, req.query.shop_id)) {
+    if (
+      scope.mode === 'shops' &&
+      !scope.shopScope.all &&
+      !isShopAllowed(scope.shopScope, req.query.shop_id)
+    ) {
       return sendSuccess(res, 'Users fetched successfully', {
         count: 0,
         users: [],
@@ -82,14 +89,20 @@ const getUsers = asyncHandler(async (req, res) => {
     filter.shop_id = req.query.shop_id;
   }
 
-  const users = await User.find(filter)
-    .populate('role_id', 'role_name permissions')
-    .populate('shop_id', 'name')
-    .populate('active_shop_id', 'name')
-    .populate('shop_history.shop_id', 'name');
+  const [total, users] = await Promise.all([
+    User.countDocuments(filter),
+    User.find(filter)
+      .populate('role_id', 'role_name permissions')
+      .populate('shop_id', 'name')
+      .populate('active_shop_id', 'name')
+      .populate('shop_history.shop_id', 'name')
+      .sort(sort)
+      .skip(skip)
+      .limit(limit),
+  ]);
 
   return sendSuccess(res, 'Users fetched successfully', {
-    count: users.length,
+    ...toPageMeta(total, page, limit, users.length),
     users,
   });
 });
@@ -147,7 +160,7 @@ const createUser = asyncHandler(async (req, res) => {
     assigned_shop_ids,
   });
 
-    // password_hash field triggers the pre-save bcrypt hook
+  // password_hash field triggers the pre-save bcrypt hook
   const user = await User.create({
     name,
     email,
@@ -229,11 +242,7 @@ const updateUser = asyncHandler(async (req, res) => {
 // @route  DELETE /api/users/:id — soft delete
 // @access Admin
 const deleteUser = asyncHandler(async (req, res) => {
-  const user = await User.findByIdAndUpdate(
-    req.params.id,
-    { is_active: false },
-    { new: true }
-  );
+  const user = await User.findByIdAndUpdate(req.params.id, { is_active: false }, { new: true });
   if (!user) throw new AppError('User not found', 404);
   return sendSuccess(res, 'User deactivated successfully', { user });
 });
@@ -251,7 +260,7 @@ const updatePassword = asyncHandler(async (req, res) => {
   }
 
   if (!device_id || typeof device_id !== 'string' || !device_id.trim()) {
-      throw new AppError('device_id is required', 400);
+    throw new AppError('device_id is required', 400);
   }
 
   const user = await User.findById(req.user._id).select('+password_hash');
@@ -297,16 +306,22 @@ const updateOwnDevice = asyncHandler(async (req, res) => {
 const getAssignedShopsStaffSummary = asyncHandler(async (req, res) => {
   const permissions = req.user?.role_id?.permissions || {};
   const canAccessSummary = Boolean(
-    permissions.can_view_all_staff || permissions.can_manage_inventory || permissions.can_manual_punch
+    permissions.can_view_all_staff ||
+    permissions.can_manage_inventory ||
+    permissions.can_manual_punch
   );
   if (!canAccessSummary) {
     throw new AppError('Forbidden: not allowed to view staff summary', 403);
   }
 
   const shopScope = buildShopScope(req.user);
+  const { page, limit } = parsePagination(req.query, {
+    defaultSortBy: 'name',
+    allowedSortBy: ['name'],
+  });
   if (!shopScope.all && shopScope.ids.length === 0) {
     return sendSuccess(res, 'Assigned-shops staff summary fetched successfully', {
-      count: 0,
+      ...toPageMeta(0, page, limit, 0),
       shops: [],
     });
   }
@@ -345,9 +360,57 @@ const getAssignedShopsStaffSummary = asyncHandler(async (req, res) => {
     byShop[sid].staff_count += 1;
   });
 
+  const allShops = Object.values(byShop);
+  const start = (page - 1) * limit;
+  const shopsPage = allShops.slice(start, start + limit);
+
   return sendSuccess(res, 'Assigned-shops staff summary fetched successfully', {
-    count: Object.values(byShop).length,
-    shops: Object.values(byShop),
+    ...toPageMeta(allShops.length, page, limit, shopsPage.length),
+    shops: shopsPage,
+  });
+});
+
+// @route GET /api/users/by-shop/:shopId/staff
+// @access Admin/Manager/Sub-Manager scoped by shop access
+const getUsersByShopExcludingRootAdmin = asyncHandler(async (req, res) => {
+  const { shopId } = req.params;
+  const scope = buildReadScope(req.user);
+  const { page, limit, skip, sort } = parsePagination(req.query, {
+    defaultSortBy: 'name',
+    allowedSortBy: ['createdAt', 'updatedAt', 'name', 'email'],
+  });
+
+  if (scope.mode === 'self') {
+    throw new AppError('Forbidden: not allowed to view shop users', 403);
+  }
+
+  if (scope.mode === 'shops' && !scope.shopScope.all && !isShopAllowed(scope.shopScope, shopId)) {
+    throw new AppError('Forbidden: shop is outside your assigned scope', 403);
+  }
+
+  const users = await User.find({
+    is_active: true,
+    shop_id: shopId,
+  })
+    .populate('role_id', 'role_name permissions')
+    .populate('shop_id', 'name')
+    .sort(sort)
+    .skip(skip)
+    .limit(limit);
+
+  const totalUsersInShop = await User.countDocuments({
+    is_active: true,
+    shop_id: shopId,
+  });
+
+  const filtered = users.filter((user) => {
+    const roleName = user.role_id?.role_name;
+    return roleName !== 'Root' && roleName !== 'Admin';
+  });
+
+  return sendSuccess(res, 'Shop users fetched successfully', {
+    ...toPageMeta(totalUsersInShop, page, limit, filtered.length),
+    users: filtered,
   });
 });
 
@@ -360,4 +423,5 @@ module.exports = {
   updatePassword,
   updateOwnDevice,
   getAssignedShopsStaffSummary,
+  getUsersByShopExcludingRootAdmin,
 };

@@ -15,3 +15,5 @@ my rota - for employee to view their own rota, for sub manager and manager to vi
 To implement the functionality for viewing attendance records and rotas based on user roles (admin, sub-manager, manager, and employee), you can follow the steps below:
 
 
+create rota api bug : create rota for only future date not past date
+make api for view attandance record in selected date and also show total hours of work done by eash employee in that date range

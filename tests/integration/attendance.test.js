@@ -2,6 +2,7 @@ const request = require('supertest');
 const app = require('../../src/app');
 const Attendance = require('../../src/models/Attendance');
 const Rota = require('../../src/models/Rota');
+const Shop = require('../../src/models/Shop');
 const User = require('../../src/models/User');
 const { expectEnvelope } = require('../helpers/assertions');
 const { login } = require('../helpers/auth');
@@ -18,6 +19,10 @@ describe('Attendance module integration', () => {
   beforeEach(async () => {
     await clearSandboxDb();
     fixtures = await seedTestData();
+    await Shop.findByIdAndUpdate(fixtures.shops.mainShop._id, {
+      opening_time: '10:00',
+      closing_time: '14:00',
+    });
 
     const now = new Date();
     const shiftStart = new Date(now.getTime() - 30 * 60 * 1000);
@@ -494,5 +499,403 @@ describe('Attendance module integration', () => {
       .set('Authorization', `Bearer ${managerLogin.token}`)
       .send({});
     expectEnvelope(managerSweep, 200);
+  });
+
+  it('ATT-023: preview closed-attendance hour adjustment for selected date range', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+    await Attendance.insertMany([
+      {
+        user_id: fixtures.users.staffUser._id,
+        shop_id: fixtures.shops.mainShop._id,
+        punch_in: new Date('2026-03-10T09:00:00.000Z'),
+        punch_out: new Date('2026-03-10T17:00:00.000Z'),
+        punch_method: 'GPS+Biometric',
+      },
+      {
+        user_id: fixtures.users.staffUser._id,
+        shop_id: fixtures.shops.mainShop._id,
+        punch_in: new Date('2026-03-11T10:00:00.000Z'),
+        punch_out: new Date('2026-03-11T14:00:00.000Z'),
+        punch_method: 'GPS+Biometric',
+      },
+    ]);
+
+    const res = await request(app)
+      .post('/api/attendance/adjust-hours/preview')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .send({
+        user_id: fixtures.users.staffUser._id.toString(),
+        shop_id: fixtures.shops.mainShop._id.toString(),
+        from_date: '2026-03-10',
+        to_date: '2026-03-11',
+        target_hours: 12,
+      });
+
+    expectEnvelope(res, 200);
+    expect(res.body.data.actual_hours).toBe(12);
+    expect(res.body.data.adjusted_hours).toBe(12);
+    expect(res.body.data.reduced_hours).toBe(0);
+    expect(res.body.data.records_count).toBe(2);
+  });
+
+  it('ATT-024: apply closed-attendance hour adjustment and persist adjusted minutes', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+    const records = await Attendance.insertMany([
+      {
+        user_id: fixtures.users.staffUser._id,
+        shop_id: fixtures.shops.mainShop._id,
+        punch_in: new Date('2026-03-15T09:00:00.000Z'),
+        punch_out: new Date('2026-03-15T17:00:00.000Z'),
+        punch_method: 'GPS+Biometric',
+      },
+      {
+        user_id: fixtures.users.staffUser._id,
+        shop_id: fixtures.shops.mainShop._id,
+        punch_in: new Date('2026-03-16T09:00:00.000Z'),
+        punch_out: new Date('2026-03-16T17:00:00.000Z'),
+        punch_method: 'GPS+Biometric',
+      },
+    ]);
+
+    const res = await request(app)
+      .post('/api/attendance/adjust-hours/apply')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .send({
+        user_id: fixtures.users.staffUser._id.toString(),
+        shop_id: fixtures.shops.mainShop._id.toString(),
+        from_date: '2026-03-15',
+        to_date: '2026-03-16',
+        target_hours: 16,
+        note: 'Payroll correction',
+      });
+
+    expectEnvelope(res, 200);
+    expect(res.body.data.actual_hours).toBe(16);
+    expect(res.body.data.adjusted_hours).toBe(16);
+
+    const first = await Attendance.findById(records[0]._id);
+    const second = await Attendance.findById(records[1]._id);
+    expect(first.adjusted_minutes).toBe(480);
+    expect(second.adjusted_minutes).toBe(480);
+    expect(second.adjustment_note).toBe('Payroll correction');
+  });
+
+  it('ATT-025: bulk-by-shop adjustment updates multiple employees in one request', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+
+    const extraStaff = await User.create({
+      name: 'Extra Staff',
+      email: 'extra.staff@org.com',
+      password_hash: 'Extra@1234',
+      role_id: fixtures.roles.staffRole._id,
+      shop_id: fixtures.shops.mainShop._id,
+      assigned_shop_ids: [fixtures.shops.mainShop._id],
+      must_change_password: true,
+    });
+
+    await Attendance.insertMany([
+      {
+        user_id: fixtures.users.staffUser._id,
+        shop_id: fixtures.shops.mainShop._id,
+        punch_in: new Date('2026-03-18T09:00:00.000Z'),
+        punch_out: new Date('2026-03-18T17:00:00.000Z'),
+        punch_method: 'GPS+Biometric',
+      },
+      {
+        user_id: extraStaff._id,
+        shop_id: fixtures.shops.mainShop._id,
+        punch_in: new Date('2026-03-18T08:00:00.000Z'),
+        punch_out: new Date('2026-03-18T16:00:00.000Z'),
+        punch_method: 'GPS+Biometric',
+      },
+    ]);
+
+    const res = await request(app)
+      .post('/api/attendance/adjust-hours/bulk-by-shop')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .send({
+        shop_id: fixtures.shops.mainShop._id.toString(),
+        from_date: '2026-03-18',
+        to_date: '2026-03-18',
+        adjustments: [
+          {
+            user_id: fixtures.users.staffUser._id.toString(),
+            target_hours: 6,
+          },
+          {
+            user_id: extraStaff._id.toString(),
+            target_hours: 5,
+          },
+        ],
+      });
+
+    expectEnvelope(res, 200);
+    expect(res.body.data.users_count).toBe(2);
+
+    const adjusted = await Attendance.find({
+      user_id: { $in: [fixtures.users.staffUser._id, extraStaff._id] },
+      punch_in: { $gte: new Date('2026-03-18T00:00:00.000Z') },
+      punch_out: { $ne: null },
+    }).sort({ user_id: 1 });
+
+    expect(adjusted.length).toBeGreaterThanOrEqual(2);
+    const targetByUser = {
+      [fixtures.users.staffUser._id.toString()]: 360,
+      [extraStaff._id.toString()]: 300,
+    };
+    adjusted.forEach((record) => {
+      expect(record.adjusted_minutes).toBe(targetByUser[record.user_id.toString()]);
+      expect(record.effective_start).toBeTruthy();
+      expect(record.effective_end).toBeTruthy();
+      expect(record.effective_minutes).toBe(targetByUser[record.user_id.toString()]);
+    });
+  });
+
+  it('ATT-026: bulk-by-shop adjustment fails when some users in date range are not selected', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+
+    const extraStaff = await User.create({
+      name: 'Unselected Staff',
+      email: 'unselected.staff@org.com',
+      password_hash: 'Extra@1234',
+      role_id: fixtures.roles.staffRole._id,
+      shop_id: fixtures.shops.mainShop._id,
+      assigned_shop_ids: [fixtures.shops.mainShop._id],
+      must_change_password: true,
+    });
+
+    await Attendance.insertMany([
+      {
+        user_id: fixtures.users.staffUser._id,
+        shop_id: fixtures.shops.mainShop._id,
+        punch_in: new Date('2026-03-19T09:00:00.000Z'),
+        punch_out: new Date('2026-03-19T17:00:00.000Z'),
+        punch_method: 'GPS+Biometric',
+      },
+      {
+        user_id: extraStaff._id,
+        shop_id: fixtures.shops.mainShop._id,
+        punch_in: new Date('2026-03-19T10:00:00.000Z'),
+        punch_out: new Date('2026-03-19T18:00:00.000Z'),
+        punch_method: 'GPS+Biometric',
+      },
+    ]);
+
+    const res = await request(app)
+      .post('/api/attendance/adjust-hours/bulk-by-shop')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .send({
+        shop_id: fixtures.shops.mainShop._id.toString(),
+        from_date: '2026-03-19',
+        to_date: '2026-03-19',
+        adjustments: [
+          {
+            user_id: fixtures.users.staffUser._id.toString(),
+            target_hours: 7,
+          },
+        ],
+      });
+
+    expectEnvelope(res, 409);
+    expect(Array.isArray(res.body.data.unchanged_users)).toBe(true);
+    expect(res.body.data.unchanged_users.length).toBe(1);
+    expect(res.body.data.unchanged_users[0].user_id).toBe(extraStaff._id.toString());
+  });
+
+  it('ATT-027: admin can fetch unchanged users for shop/date range', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+
+    await Attendance.create({
+      user_id: fixtures.users.staffUser._id,
+      shop_id: fixtures.shops.mainShop._id,
+      punch_in: new Date('2026-03-20T09:00:00.000Z'),
+      punch_out: new Date('2026-03-20T16:00:00.000Z'),
+      punch_method: 'GPS+Biometric',
+    });
+
+    const res = await request(app)
+      .get('/api/attendance/adjust-hours/unchanged-users')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({
+        shop_id: fixtures.shops.mainShop._id.toString(),
+        from_date: '2026-03-20',
+        to_date: '2026-03-20',
+      });
+
+    expectEnvelope(res, 200);
+    expect(res.body.data.count).toBeGreaterThanOrEqual(1);
+    expect(Array.isArray(res.body.data.users)).toBe(true);
+  });
+
+  it('ATT-028: coverage validation uses historical shop hours for past-date adjustments', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+
+    await Shop.findByIdAndUpdate(fixtures.shops.mainShop._id, {
+      opening_time: '10:00',
+      closing_time: '14:00',
+      shop_time_history: [
+        {
+          opening_time: '08:00',
+          closing_time: '14:00',
+          effective_from: new Date('2026-03-01T00:00:00.000Z'),
+          effective_to: new Date('2026-03-20T00:00:00.000Z'),
+          changed_at: new Date('2026-03-01T00:00:00.000Z'),
+        },
+        {
+          opening_time: '10:00',
+          closing_time: '14:00',
+          effective_from: new Date('2026-03-20T00:00:00.000Z'),
+          effective_to: null,
+          changed_at: new Date('2026-03-20T00:00:00.000Z'),
+        },
+      ],
+    });
+
+    await Attendance.create({
+      user_id: fixtures.users.staffUser._id,
+      shop_id: fixtures.shops.mainShop._id,
+      punch_in: new Date('2026-03-10T10:00:00.000Z'),
+      punch_out: new Date('2026-03-10T14:00:00.000Z'),
+      punch_method: 'GPS+Biometric',
+    });
+
+    const res = await request(app)
+      .post('/api/attendance/adjust-hours/preview')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .send({
+        user_id: fixtures.users.staffUser._id.toString(),
+        shop_id: fixtures.shops.mainShop._id.toString(),
+        from_date: '2026-03-10',
+        to_date: '2026-03-10',
+        target_hours: 4,
+      });
+
+    expectEnvelope(res, 409);
+    expect(Array.isArray(res.body.data.gaps)).toBe(true);
+    expect(res.body.data.gaps.length).toBeGreaterThan(0);
+  });
+
+  it('ATT-029: non-root sees effective punch_in/out while root sees actual punch_in/out', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+    const rootLogin = await login('root@org.com', 'Root@1234');
+
+    const record = await Attendance.create({
+      user_id: fixtures.users.staffUser._id,
+      shop_id: fixtures.shops.mainShop._id,
+      punch_in: new Date('2026-03-22T09:00:00.000Z'),
+      punch_out: new Date('2026-03-22T17:00:00.000Z'),
+      effective_start: new Date('2026-03-22T10:00:00.000Z'),
+      effective_end: new Date('2026-03-22T16:00:00.000Z'),
+      effective_minutes: 360,
+      effective_source: 'Adjusted',
+      punch_method: 'GPS+Biometric',
+    });
+
+    const adminRes = await request(app)
+      .get(`/api/attendance?user_id=${fixtures.users.staffUser._id}`)
+      .set('Authorization', `Bearer ${adminLogin.token}`);
+
+    expectEnvelope(adminRes, 200);
+    const adminRecord = adminRes.body.data.records.find(
+      (item) => item._id === record._id.toString()
+    );
+    expect(adminRecord).toBeTruthy();
+    expect(adminRecord.punch_in).toBe('2026-03-22T10:00:00.000Z');
+    expect(adminRecord.punch_out).toBe('2026-03-22T16:00:00.000Z');
+
+    const rootRes = await request(app)
+      .get(`/api/attendance?user_id=${fixtures.users.staffUser._id}`)
+      .set('Authorization', `Bearer ${rootLogin.token}`);
+
+    expectEnvelope(rootRes, 200);
+    const rootRecord = rootRes.body.data.records.find((item) => item._id === record._id.toString());
+    expect(rootRecord).toBeTruthy();
+    expect(rootRecord.punch_in).toBe('2026-03-22T09:00:00.000Z');
+    expect(rootRecord.punch_out).toBe('2026-03-22T17:00:00.000Z');
+  });
+
+  it('ATT-030: non-root attendance view is capped to last 30 days', async () => {
+    const managerLogin = await login('manager@org.com', 'Manager@1234');
+    const rootLogin = await login('root@org.com', 'Root@1234');
+
+    const olderThanThirty = new Date();
+    olderThanThirty.setUTCDate(olderThanThirty.getUTCDate() - 45);
+    const olderOut = new Date(olderThanThirty.getTime() + 2 * 60 * 60 * 1000);
+
+    await Attendance.create({
+      user_id: fixtures.users.staffUser._id,
+      shop_id: fixtures.shops.mainShop._id,
+      punch_in: olderThanThirty,
+      punch_out: olderOut,
+      punch_method: 'GPS+Biometric',
+    });
+
+    const managerRes = await request(app)
+      .get('/api/attendance')
+      .set('Authorization', `Bearer ${managerLogin.token}`);
+    expectEnvelope(managerRes, 200);
+    const managerHasOld = managerRes.body.data.records.some(
+      (record) => new Date(record.punch_in).getTime() === olderThanThirty.getTime()
+    );
+    expect(managerHasOld).toBe(false);
+
+    const rootRes = await request(app)
+      .get('/api/attendance')
+      .set('Authorization', `Bearer ${rootLogin.token}`);
+    expectEnvelope(rootRes, 200);
+    const rootHasOld = rootRes.body.data.records.some(
+      (record) => new Date(record.punch_in).getTime() === olderThanThirty.getTime()
+    );
+    expect(rootHasOld).toBe(true);
+  });
+
+  it('ATT-031: admin is limited to assigned shops while root can view all shops', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+    const rootLogin = await login('root@org.com', 'Root@1234');
+
+    const remoteShop = await Shop.create({
+      name: 'Remote Branch',
+      latitude: 52.4,
+      longitude: -0.6,
+      geofence_radius_m: 120,
+      opening_time: '10:00',
+      closing_time: '14:00',
+    });
+
+    const remoteUser = await User.create({
+      name: 'Remote Staff',
+      email: 'remote.staff@org.com',
+      password_hash: 'Remote@1234',
+      role_id: fixtures.roles.staffRole._id,
+      shop_id: remoteShop._id,
+      assigned_shop_ids: [remoteShop._id],
+      must_change_password: true,
+    });
+
+    const remoteRecord = await Attendance.create({
+      user_id: remoteUser._id,
+      shop_id: remoteShop._id,
+      punch_in: new Date(),
+      punch_out: new Date(Date.now() + 2 * 60 * 60 * 1000),
+      punch_method: 'GPS+Biometric',
+    });
+
+    const adminRes = await request(app)
+      .get('/api/attendance')
+      .set('Authorization', `Bearer ${adminLogin.token}`);
+    expectEnvelope(adminRes, 200);
+    const adminSeesRemote = adminRes.body.data.records.some(
+      (record) => record._id === remoteRecord._id.toString()
+    );
+    expect(adminSeesRemote).toBe(false);
+
+    const rootRes = await request(app)
+      .get('/api/attendance')
+      .set('Authorization', `Bearer ${rootLogin.token}`);
+    expectEnvelope(rootRes, 200);
+    const rootSeesRemote = rootRes.body.data.records.some(
+      (record) => record._id === remoteRecord._id.toString()
+    );
+    expect(rootSeesRemote).toBe(true);
   });
 });

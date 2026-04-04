@@ -3,11 +3,7 @@ const app = require('../../src/app');
 const { expectEnvelope } = require('../helpers/assertions');
 const { login } = require('../helpers/auth');
 const { seedTestData } = require('../helpers/seedTestData');
-const {
-  connectSandboxDb,
-  clearSandboxDb,
-  disconnectSandboxDb,
-} = require('../setup/testDb');
+const { connectSandboxDb, clearSandboxDb, disconnectSandboxDb } = require('../setup/testDb');
 
 describe('Shops module integration', () => {
   let fixtures;
@@ -78,6 +74,49 @@ describe('Shops module integration', () => {
     expectEnvelope(deleteRes, 200);
   });
 
+  it('SHOP-007: admin can update shop hours and read shop hours history', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+
+    const updateRes = await request(app)
+      .put(`/api/shops/${fixtures.shops.mainShop._id}/hours`)
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .send({
+        opening_time: '09:00',
+        closing_time: '21:00',
+        note: 'Summer timing',
+      });
+
+    expectEnvelope(updateRes, 200);
+    expect(updateRes.body.data.shop.opening_time).toBe('09:00');
+    expect(updateRes.body.data.shop.closing_time).toBe('21:00');
+
+    const historyRes = await request(app)
+      .get(`/api/shops/${fixtures.shops.mainShop._id}/hours-history`)
+      .set('Authorization', `Bearer ${adminLogin.token}`);
+
+    expectEnvelope(historyRes, 200);
+    expect(historyRes.body.data.count).toBeGreaterThan(0);
+    expect(Array.isArray(historyRes.body.data.history)).toBe(true);
+  });
+
+  it('SHOP-008: staff cannot update or read shop-hours history', async () => {
+    const staffLogin = await login('staff@org.com', 'Staff@1234');
+
+    const updateRes = await request(app)
+      .put(`/api/shops/${fixtures.shops.mainShop._id}/hours`)
+      .set('Authorization', `Bearer ${staffLogin.token}`)
+      .send({
+        opening_time: '09:00',
+        closing_time: '21:00',
+      });
+    expectEnvelope(updateRes, 403);
+
+    const historyRes = await request(app)
+      .get(`/api/shops/${fixtures.shops.mainShop._id}/hours-history`)
+      .set('Authorization', `Bearer ${staffLogin.token}`);
+    expectEnvelope(historyRes, 403);
+  });
+
   it('SHOP exceptions: returns not found for missing shop id on get/update/delete', async () => {
     const adminLogin = await login('admin@org.com', 'Admin@1234');
     const missingId = '507f1f77bcf86cd799439011';
@@ -118,4 +157,3 @@ describe('Shops module integration', () => {
     expectEnvelope(blockedRes, 404);
   });
 });
-

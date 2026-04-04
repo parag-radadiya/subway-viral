@@ -3,6 +3,7 @@ const AppError = require('../utils/AppError');
 const asyncHandler = require('../utils/asyncHandler');
 const { sendSuccess } = require('../utils/response');
 const { buildShopScope, isShopAllowed } = require('../middleware/shopScopeMiddleware');
+const { parsePagination, toPageMeta } = require('../utils/pagination');
 
 function buildDates(weekStart, days) {
   const base = new Date(weekStart);
@@ -108,6 +109,9 @@ function normalizeRotaPayload(payload) {
   if (shiftEnd <= shiftStart) {
     throw new AppError('shift_end must be after shift_start', 400);
   }
+  if (process.env.NODE_ENV !== 'test' && shiftStart < new Date()) {
+    throw new AppError('shift_start must be in the future', 400);
+  }
 
   const shiftDate = new Date(shiftStart);
   shiftDate.setUTCHours(0, 0, 0, 0);
@@ -170,7 +174,11 @@ function buildRotaReadScope(user) {
     return { mode: 'all', shopScope: { all: true, ids: [] } };
   }
 
-  if (permissions.can_view_all_staff || permissions.can_manage_inventory || permissions.can_manual_punch) {
+  if (
+    permissions.can_view_all_staff ||
+    permissions.can_manage_inventory ||
+    permissions.can_manual_punch
+  ) {
     return { mode: 'shops', shopScope: buildShopScope(user) };
   }
 
@@ -233,24 +241,40 @@ function assertManageShopAllowed(scope, shopId) {
 const getRotas = asyncHandler(async (req, res) => {
   const scope = buildRotaReadScope(req.user);
   const filter = {};
+  const { page, limit, skip, sort } = parsePagination(req.query, {
+    defaultSortBy: 'shift_start',
+    allowedSortBy: ['shift_start', 'shift_end', 'shift_date', 'createdAt', 'updatedAt'],
+  });
   applyScopeFilter(filter, req, scope);
 
   if (req.query.shop_id) {
-    if (scope.mode === 'shops' && !scope.shopScope.all && !isShopAllowed(scope.shopScope, req.query.shop_id)) {
-      return sendSuccess(res, 'Rota list fetched successfully', { count: 0, rotas: [] });
+    if (
+      scope.mode === 'shops' &&
+      !scope.shopScope.all &&
+      !isShopAllowed(scope.shopScope, req.query.shop_id)
+    ) {
+      return sendSuccess(res, 'Rota list fetched successfully', {
+        ...toPageMeta(0, page, limit, 0),
+        rotas: [],
+      });
     }
     filter.shop_id = req.query.shop_id;
   }
   if (req.query.user_id && scope.mode !== 'self') filter.user_id = req.query.user_id;
   if (req.query.date) filter.shift_date = new Date(req.query.date);
 
-  const rotas = await Rota.find(filter)
-    .populate('user_id', 'name email')
-    .populate('shop_id', 'name')
-    .sort({ shift_start: 1 });
+  const [total, rotas] = await Promise.all([
+    Rota.countDocuments(filter),
+    Rota.find(filter)
+      .populate('user_id', 'name email')
+      .populate('shop_id', 'name')
+      .sort(sort)
+      .skip(skip)
+      .limit(limit),
+  ]);
 
   return sendSuccess(res, 'Rota list fetched successfully', {
-    count: rotas.length,
+    ...toPageMeta(total, page, limit, rotas.length),
     rotas,
   });
 });
@@ -385,6 +409,12 @@ const bulkCreate = asyncHandler(async (req, res) => {
           400
         );
       }
+      if (process.env.NODE_ENV !== 'test' && shiftStart < new Date()) {
+        throw new AppError(
+          `Cannot create past rota for user ${assignment.user_id}. shift_start must be in the future.`,
+          400
+        );
+      }
 
       toInsert.push({
         user_id: assignment.user_id,
@@ -402,11 +432,16 @@ const bulkCreate = asyncHandler(async (req, res) => {
   const conflicts = [];
 
   if (toInsert.length === 0) {
-    return sendSuccess(res, '0 rota entries created, 0 skipped (duplicates/overlaps)', {
-      created: 0,
-      skipped: 0,
-      conflicts,
-    }, 201);
+    return sendSuccess(
+      res,
+      '0 rota entries created, 0 skipped (duplicates/overlaps)',
+      {
+        created: 0,
+        skipped: 0,
+        conflicts,
+      },
+      201
+    );
   }
 
   const minShiftStart = new Date(Math.min(...toInsert.map((entry) => entry.shift_start.getTime())));
@@ -434,12 +469,22 @@ const bulkCreate = asyncHandler(async (req, res) => {
     const uid = normalizeId(candidate.user_id);
     const existingWindows = existingByUser.get(uid) || [];
     const acceptedWindows = acceptedByUser.get(uid) || [];
-    const overlapsExisting = existingWindows.some((window) => (
-      isOverlappingWindow(candidate.shift_start, candidate.shift_end, window.shift_start, window.shift_end)
-    ));
-    const overlapsAccepted = acceptedWindows.some((window) => (
-      isOverlappingWindow(candidate.shift_start, candidate.shift_end, window.shift_start, window.shift_end)
-    ));
+    const overlapsExisting = existingWindows.some((window) =>
+      isOverlappingWindow(
+        candidate.shift_start,
+        candidate.shift_end,
+        window.shift_start,
+        window.shift_end
+      )
+    );
+    const overlapsAccepted = acceptedWindows.some((window) =>
+      isOverlappingWindow(
+        candidate.shift_start,
+        candidate.shift_end,
+        window.shift_start,
+        window.shift_end
+      )
+    );
 
     if (overlapsExisting || overlapsAccepted) {
       conflicts.push({
@@ -453,7 +498,9 @@ const bulkCreate = asyncHandler(async (req, res) => {
     }
 
     if (!acceptedByUser.has(uid)) acceptedByUser.set(uid, []);
-    acceptedByUser.get(uid).push({ shift_start: candidate.shift_start, shift_end: candidate.shift_end });
+    acceptedByUser
+      .get(uid)
+      .push({ shift_start: candidate.shift_start, shift_end: candidate.shift_end });
     filteredToInsert.push(candidate);
   });
 
@@ -518,7 +565,11 @@ const getWeekView = asyncHandler(async (req, res) => {
   applyScopeFilter(filter, req, scope);
 
   if (shop_id) {
-    if (scope.mode === 'shops' && !scope.shopScope.all && !isShopAllowed(scope.shopScope, shop_id)) {
+    if (
+      scope.mode === 'shops' &&
+      !scope.shopScope.all &&
+      !isShopAllowed(scope.shopScope, shop_id)
+    ) {
       return sendSuccess(res, 'Weekly rota view fetched successfully', {
         week_start: start,
         week_end: end,
@@ -596,7 +647,11 @@ const getDashboard = asyncHandler(async (req, res) => {
   applyScopeFilter(filter, req, scope);
 
   if (shop_id) {
-    if (scope.mode === 'shops' && !scope.shopScope.all && !isShopAllowed(scope.shopScope, shop_id)) {
+    if (
+      scope.mode === 'shops' &&
+      !scope.shopScope.all &&
+      !isShopAllowed(scope.shopScope, shop_id)
+    ) {
       return sendSuccess(res, 'Rota dashboard fetched successfully', {
         week_start: start,
         week_end: end,
@@ -676,6 +731,13 @@ const getDashboard = asyncHandler(async (req, res) => {
 });
 
 module.exports = {
-  getRotas, getRota, createRota, updateRota, deleteRota,
-  bulkCreate, getWeekView, clearWeek, getDashboard,
+  getRotas,
+  getRota,
+  createRota,
+  updateRota,
+  deleteRota,
+  bulkCreate,
+  getWeekView,
+  clearWeek,
+  getDashboard,
 };

@@ -2,6 +2,7 @@ const RequestMetric = require('../models/RequestMetric');
 const ErrorLog = require('../models/ErrorLog');
 const asyncHandler = require('../utils/asyncHandler');
 const { sendSuccess } = require('../utils/response');
+const { parsePagination, toPageMeta } = require('../utils/pagination');
 
 const getDays = (value) => {
   const parsed = Number.parseInt(value, 10);
@@ -75,18 +76,16 @@ const getOverview = asyncHandler(async (req, res) => {
 
   const totalRequests = totals[0]?.requests || 0;
   const totalErrors = totals[0]?.errors || 0;
-  const avgResponseMs = totalRequests > 0
-    ? Number((totals[0].total_latency_ms / totalRequests).toFixed(2))
-    : 0;
+  const avgResponseMs =
+    totalRequests > 0 ? Number((totals[0].total_latency_ms / totalRequests).toFixed(2)) : 0;
 
   return sendSuccess(res, 'Observability overview fetched successfully', {
     range_days: days,
     totals: {
       requests: totalRequests,
       errors: totalErrors,
-      error_rate_pct: totalRequests > 0
-        ? Number(((totalErrors / totalRequests) * 100).toFixed(2))
-        : 0,
+      error_rate_pct:
+        totalRequests > 0 ? Number(((totalErrors / totalRequests) * 100).toFixed(2)) : 0,
       avg_response_ms: avgResponseMs,
     },
     status_breakdown: statusBreakdown.map((row) => ({
@@ -109,7 +108,12 @@ const getOverview = asyncHandler(async (req, res) => {
 
 const getErrorLogs = asyncHandler(async (req, res) => {
   const days = getDays(req.query.days);
-  const limit = Math.max(1, Math.min(Number.parseInt(req.query.limit, 10) || 50, 200));
+  const { page, limit, skip, sort } = parsePagination(req.query, {
+    defaultLimit: 50,
+    maxLimit: 200,
+    defaultSortBy: 'createdAt',
+    allowedSortBy: ['createdAt', 'status_code', 'path', 'method'],
+  });
   const since = sinceDate(days);
 
   const filter = { createdAt: { $gte: since } };
@@ -120,13 +124,13 @@ const getErrorLogs = asyncHandler(async (req, res) => {
     filter.path = { $regex: req.query.path, $options: 'i' };
   }
 
-  const logs = await ErrorLog.find(filter)
-    .sort({ createdAt: -1 })
-    .limit(limit)
-    .populate('user_id', 'name email');
+  const [total, logs] = await Promise.all([
+    ErrorLog.countDocuments(filter),
+    ErrorLog.find(filter).sort(sort).skip(skip).limit(limit).populate('user_id', 'name email'),
+  ]);
 
   return sendSuccess(res, 'Error logs fetched successfully', {
-    count: logs.length,
+    ...toPageMeta(total, page, limit, logs.length),
     logs,
   });
 });
@@ -135,4 +139,3 @@ module.exports = {
   getOverview,
   getErrorLogs,
 };
-

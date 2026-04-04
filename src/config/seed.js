@@ -37,6 +37,7 @@ const seed = async () => {
         can_manage_inventory: true,
         can_manage_shops: true,
         can_manage_roles: true,
+        can_adjust_attendance_hours: true,
       },
     },
     {
@@ -49,6 +50,7 @@ const seed = async () => {
         can_manage_inventory: true,
         can_manage_shops: true,
         can_manage_roles: false,
+        can_adjust_attendance_hours: true,
       },
     },
     {
@@ -61,6 +63,7 @@ const seed = async () => {
         can_manage_inventory: true,
         can_manage_shops: false,
         can_manage_roles: false,
+        can_adjust_attendance_hours: false,
       },
     },
     {
@@ -73,6 +76,7 @@ const seed = async () => {
         can_manage_inventory: true,
         can_manage_shops: false,
         can_manage_roles: false,
+        can_adjust_attendance_hours: false,
       },
     },
     {
@@ -85,15 +89,16 @@ const seed = async () => {
         can_manage_inventory: false,
         can_manage_shops: false,
         can_manage_roles: false,
+        can_adjust_attendance_hours: false,
       },
     },
   ]);
 
-  const rootRole     = roles.find(r => r.role_name === 'Root');
-  const adminRole    = roles.find(r => r.role_name === 'Admin');
-  const managerRole  = roles.find(r => r.role_name === 'Manager');
-  const subMgrRole   = roles.find(r => r.role_name === 'Sub-Manager');
-  const staffRole    = roles.find(r => r.role_name === 'Staff');
+  const rootRole = roles.find((r) => r.role_name === 'Root');
+  const adminRole = roles.find((r) => r.role_name === 'Admin');
+  const managerRole = roles.find((r) => r.role_name === 'Manager');
+  const subMgrRole = roles.find((r) => r.role_name === 'Sub-Manager');
+  const staffRole = roles.find((r) => r.role_name === 'Staff');
   console.log(`✅ ${roles.length} roles created`);
 
   // ─── 2. Shops ─────────────────────────────────────────
@@ -103,12 +108,16 @@ const seed = async () => {
       latitude: 51.5074,
       longitude: -0.1278,
       geofence_radius_m: 150,
+      opening_time: '08:00',
+      closing_time: '22:00',
     },
     {
       name: 'East Branch',
       latitude: 51.5155,
       longitude: -0.0922,
       geofence_radius_m: 100,
+      opening_time: '08:00',
+      closing_time: '22:00',
     },
   ]);
   const mainShop = shops[0];
@@ -123,12 +132,12 @@ const seed = async () => {
       email: 'root@org.com',
       phone_code: '+44',
       phone_num: '7000000000',
-      password_hash: 'Root@1234',        // ← change after first login
+      password_hash: 'Root@1234', // ← change after first login
       role_id: rootRole._id,
       device_id: 'root-device-001',
       shop_id: mainShop._id,
       assigned_shop_ids: [mainShop._id, eastShop._id],
-      must_change_password: false,        // root already knows their creds
+      must_change_password: false, // root already knows their creds
     },
     {
       name: 'Alice Admin',
@@ -187,8 +196,8 @@ const seed = async () => {
     users.push(created);
   }
 
-  const rootUser   = users[0];
-  const staffUser  = users[4];
+  const rootUser = users[0];
+  const staffUser = users[4];
   console.log(`✅ ${users.length} users created`);
 
   // ─── 4. Rotas ─────────────────────────────────────────

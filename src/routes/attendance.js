@@ -9,6 +9,10 @@ const {
   getEligibleRotas,
   reconcileAllOverdue,
   reconcileSelfOverdue,
+  previewClosedAttendanceAdjustment,
+  applyClosedAttendanceAdjustment,
+  bulkAdjustClosedAttendanceByShop,
+  getUnchangedUsersForRange,
 } = require('../controllers/attendanceController');
 const { protect } = require('../middleware/authMiddleware');
 const { requirePermission } = require('../middleware/permMiddleware');
@@ -162,6 +166,110 @@ router.post('/reconcile-self', protect, reconcileSelfOverdue);
 
 /**
  * @swagger
+ * /api/attendance/adjust-hours/preview:
+ *   post:
+ *     summary: Preview effective-hours adjustment for one user in a date range
+ *     tags: [Attendance]
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Preview generated
+ */
+
+router.post(
+  '/adjust-hours/preview',
+  protect,
+  requirePermission('can_adjust_attendance_hours'),
+  previewClosedAttendanceAdjustment
+);
+
+/**
+ * @swagger
+ * /api/attendance/adjust-hours/apply:
+ *   post:
+ *     summary: Apply effective-hours adjustment for one user in a date range
+ *     tags: [Attendance]
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Adjustment applied
+ */
+
+router.post(
+  '/adjust-hours/apply',
+  protect,
+  requirePermission('can_adjust_attendance_hours'),
+  applyClosedAttendanceAdjustment
+);
+
+/**
+ * @swagger
+ * /api/attendance/adjust-hours/bulk-by-shop:
+ *   post:
+ *     summary: Bulk-apply effective-hours adjustments for selected users in one shop/date range
+ *     tags: [Attendance]
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Bulk adjustment applied
+ */
+
+router.post(
+  '/adjust-hours/bulk-by-shop',
+  protect,
+  requirePermission('can_adjust_attendance_hours'),
+  bulkAdjustClosedAttendanceByShop
+);
+
+/**
+ * @swagger
+ * /api/attendance/adjust-hours/unchanged-users:
+ *   get:
+ *     summary: List users in the selected shop/date range not yet included in adjustment selection
+ *     tags: [Attendance]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: shop_id
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: from_date
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: to_date
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Unchanged users list
+ */
+
+router.get(
+  '/adjust-hours/unchanged-users',
+  protect,
+  requirePermission('can_adjust_attendance_hours'),
+  getUnchangedUsersForRange
+);
+
+/**
+ * @swagger
  * /api/attendance/manual-punch-in:
  *   post:
  *     summary: Sub-Manager manual punch-in (exception flow — no GPS/biometric)
@@ -239,6 +347,24 @@ router.put('/:id/punch-out', protect, punchOut);
  *         schema:
  *           type: string
  *         description: Filter by shop ID
+ *       - in: query
+ *         name: from_date
+ *         schema:
+ *           type: string
+ *           format: date
+ *       - in: query
+ *         name: to_date
+ *         schema:
+ *           type: string
+ *           format: date
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
  *     responses:
  *       200:
  *         description: List of attendance records

@@ -4,11 +4,7 @@ const User = require('../../src/models/User');
 const { expectEnvelope } = require('../helpers/assertions');
 const { login } = require('../helpers/auth');
 const { seedTestData } = require('../helpers/seedTestData');
-const {
-  connectSandboxDb,
-  clearSandboxDb,
-  disconnectSandboxDb,
-} = require('../setup/testDb');
+const { connectSandboxDb, clearSandboxDb, disconnectSandboxDb } = require('../setup/testDb');
 
 describe('Users module integration', () => {
   let fixtures;
@@ -69,8 +65,12 @@ describe('Users module integration', () => {
 
     expectEnvelope(res, 201);
     expect(res.body.data.user.must_change_password).toBe(true);
-    expect(res.body.data.user.active_shop_id.toString()).toBe(fixtures.shops.mainShop._id.toString());
-    expect(res.body.data.user.assigned_shop_ids.map(String)).toContain(fixtures.shops.mainShop._id.toString());
+    expect(res.body.data.user.active_shop_id.toString()).toBe(
+      fixtures.shops.mainShop._id.toString()
+    );
+    expect(res.body.data.user.assigned_shop_ids.map(String)).toContain(
+      fixtures.shops.mainShop._id.toString()
+    );
   });
 
   it('USER-007: blocks create user without can_create_users permission', async () => {
@@ -159,8 +159,9 @@ describe('Users module integration', () => {
     expect(updated.shop_id.toString()).toBe(fixtures.shops.eastShop._id.toString());
     expect(Array.isArray(updated.shop_history)).toBe(true);
     expect(updated.shop_history.length).toBeGreaterThan(0);
-    expect(updated.shop_history[updated.shop_history.length - 1].shop_id.toString())
-      .toBe(fixtures.shops.mainShop._id.toString());
+    expect(updated.shop_history[updated.shop_history.length - 1].shop_id.toString()).toBe(
+      fixtures.shops.mainShop._id.toString()
+    );
   });
 
   it('USER-009: returns not found when updating unknown user', async () => {
@@ -218,6 +219,20 @@ describe('Users module integration', () => {
     expectEnvelope(forbiddenRes, 403);
   });
 
+  it('USER-015: manager can fetch shop users excluding Root and Admin roles', async () => {
+    const managerLogin = await login('manager@org.com', 'Manager@1234');
+
+    const res = await request(app)
+      .get(`/api/users/by-shop/${fixtures.shops.mainShop._id}/staff`)
+      .set('Authorization', `Bearer ${managerLogin.token}`);
+
+    expectEnvelope(res, 200);
+    expect(Array.isArray(res.body.data.users)).toBe(true);
+    const roleNames = res.body.data.users.map((user) => user.role_id?.role_name).filter(Boolean);
+    expect(roleNames).not.toContain('Root');
+    expect(roleNames).not.toContain('Admin');
+  });
+
   it('SEC-001: rejects protected endpoint without token', async () => {
     const res = await request(app).get('/api/users');
     expectEnvelope(res, 401);
@@ -262,4 +277,3 @@ describe('Users module integration', () => {
     expect(newLoginRes.body.data.must_change_password).toBe(true);
   });
 });
-

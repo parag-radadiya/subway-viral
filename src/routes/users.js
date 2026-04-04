@@ -9,6 +9,7 @@ const {
   updatePassword,
   updateOwnDevice,
   getAssignedShopsStaffSummary,
+  getUsersByShopExcludingRootAdmin,
 } = require('../controllers/userController');
 const { protect } = require('../middleware/authMiddleware');
 const { requirePermission } = require('../middleware/permMiddleware');
@@ -70,6 +71,26 @@ router.put('/me/device', protect, updateOwnDevice);
  *     summary: List all active users
  *     tags: [Users]
  *     parameters:
+ *       - in: query
+ *         name: shop_id
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: sort_by
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: sort_order
+ *         schema:
+ *           type: string
  *     responses:
  *       200:
  *         description: List of users
@@ -91,6 +112,31 @@ router.put('/me/device', protect, updateOwnDevice);
 router.get('/', protect, getUsers);
 router.post('/', protect, requirePermission('can_create_users'), createUser);
 router.get('/assigned-shops/staff-summary', protect, getAssignedShopsStaffSummary);
+/**
+ * @swagger
+ * /api/users/by-shop/{shopId}/staff:
+ *   get:
+ *     summary: List shop users excluding Root/Admin roles
+ *     tags: [Users]
+ *     parameters:
+ *       - in: path
+ *         name: shopId
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Shop users list
+ */
+router.get('/by-shop/:shopId/staff', protect, getUsersByShopExcludingRootAdmin);
 
 /**
  * /api/users/{id}:
