@@ -2,6 +2,7 @@ const request = require('supertest');
 const app = require('../../src/app');
 const Attendance = require('../../src/models/Attendance');
 const Rota = require('../../src/models/Rota');
+const Role = require('../../src/models/Role');
 const Shop = require('../../src/models/Shop');
 const User = require('../../src/models/User');
 const { expectEnvelope } = require('../helpers/assertions');
@@ -620,11 +621,11 @@ describe('Attendance module integration', () => {
         adjustments: [
           {
             user_id: fixtures.users.staffUser._id.toString(),
-            target_hours: 6,
+            target_hours: 8,
           },
           {
             user_id: extraStaff._id.toString(),
-            target_hours: 5,
+            target_hours: 6,
           },
         ],
       });
@@ -640,8 +641,8 @@ describe('Attendance module integration', () => {
 
     expect(adjusted.length).toBeGreaterThanOrEqual(2);
     const targetByUser = {
-      [fixtures.users.staffUser._id.toString()]: 360,
-      [extraStaff._id.toString()]: 300,
+      [fixtures.users.staffUser._id.toString()]: 480,
+      [extraStaff._id.toString()]: 360,
     };
     adjusted.forEach((record) => {
       expect(record.adjusted_minutes).toBe(targetByUser[record.user_id.toString()]);
@@ -773,6 +774,19 @@ describe('Attendance module integration', () => {
     expectEnvelope(res, 409);
     expect(Array.isArray(res.body.data.gaps)).toBe(true);
     expect(res.body.data.gaps.length).toBeGreaterThan(0);
+    expect(typeof res.body.data.total_missing_minutes).toBe('number');
+    expect(res.body.data.total_missing_minutes).toBeGreaterThan(0);
+    expect(typeof res.body.data.total_missing_hours).toBe('number');
+    expect(Array.isArray(res.body.data.uncovered_windows_preview)).toBe(true);
+    expect(typeof res.body.data.summary).toBe('string');
+    expect(Array.isArray(res.body.data.possible_solutions)).toBe(true);
+    expect(res.body.data.possible_solutions.length).toBeGreaterThan(0);
+    expect(typeof res.body.data.required_coverage_hours).toBe('number');
+    expect(typeof res.body.data.achievable_coverage_hours_after_adjustment).toBe('number');
+    expect(typeof res.body.data.expected_missing_if_even_distribution_hours).toBe('number');
+    expect(res.body.data.notes).toBeTruthy();
+    expect(typeof res.body.data.notes.total_missing_hours).toBe('string');
+    expect(typeof res.body.data.admin_hint).toBe('string');
   });
 
   it('ATT-029: non-root sees effective punch_in/out while root sees actual punch_in/out', async () => {
@@ -814,8 +828,9 @@ describe('Attendance module integration', () => {
     expect(rootRecord.punch_out).toBe('2026-03-22T17:00:00.000Z');
   });
 
-  it('ATT-030: non-root attendance view is capped to last 30 days', async () => {
+  it('ATT-030: manager view is capped to last 30 days while admin/root are not capped', async () => {
     const managerLogin = await login('manager@org.com', 'Manager@1234');
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
     const rootLogin = await login('root@org.com', 'Root@1234');
 
     const olderThanThirty = new Date();
@@ -839,6 +854,15 @@ describe('Attendance module integration', () => {
     );
     expect(managerHasOld).toBe(false);
 
+    const adminRes = await request(app)
+      .get('/api/attendance')
+      .set('Authorization', `Bearer ${adminLogin.token}`);
+    expectEnvelope(adminRes, 200);
+    const adminHasOld = adminRes.body.data.records.some(
+      (record) => new Date(record.punch_in).getTime() === olderThanThirty.getTime()
+    );
+    expect(adminHasOld).toBe(true);
+
     const rootRes = await request(app)
       .get('/api/attendance')
       .set('Authorization', `Bearer ${rootLogin.token}`);
@@ -849,7 +873,7 @@ describe('Attendance module integration', () => {
     expect(rootHasOld).toBe(true);
   });
 
-  it('ATT-031: admin is limited to assigned shops while root can view all shops', async () => {
+  it('ATT-031: admin and root can view attendance across shops', async () => {
     const adminLogin = await login('admin@org.com', 'Admin@1234');
     const rootLogin = await login('root@org.com', 'Root@1234');
 
@@ -887,7 +911,7 @@ describe('Attendance module integration', () => {
     const adminSeesRemote = adminRes.body.data.records.some(
       (record) => record._id === remoteRecord._id.toString()
     );
-    expect(adminSeesRemote).toBe(false);
+    expect(adminSeesRemote).toBe(true);
 
     const rootRes = await request(app)
       .get('/api/attendance')
@@ -897,5 +921,174 @@ describe('Attendance module integration', () => {
       (record) => record._id === remoteRecord._id.toString()
     );
     expect(rootSeesRemote).toBe(true);
+  });
+
+  it('ATT-032: admin can query attendance by explicit shop_id even without assigned shops', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+
+    await User.findByIdAndUpdate(fixtures.users.adminUser._id, {
+      assigned_shop_ids: [],
+      shop_id: null,
+      active_shop_id: null,
+    });
+
+    const record = await Attendance.create({
+      user_id: fixtures.users.staffUser._id,
+      shop_id: fixtures.shops.mainShop._id,
+      punch_in: new Date(),
+      punch_out: new Date(Date.now() + 60 * 60 * 1000),
+      punch_method: 'GPS+Biometric',
+    });
+
+    const res = await request(app)
+      .get(`/api/attendance?shop_id=${fixtures.shops.mainShop._id}`)
+      .set('Authorization', `Bearer ${adminLogin.token}`);
+
+    expectEnvelope(res, 200);
+    const hit = res.body.data.records.find((item) => item._id === record._id.toString());
+    expect(hit).toBeTruthy();
+  });
+
+  it('ATT-033: admin with no shop and no global perms can still view all-shop attendance with effective time mapping', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+
+    await User.findByIdAndUpdate(fixtures.users.adminUser._id, {
+      assigned_shop_ids: [],
+      shop_id: null,
+      active_shop_id: null,
+    });
+    await Role.findByIdAndUpdate(fixtures.roles.adminRole._id, {
+      $set: {
+        // Simulate production misconfiguration where Admin permissions are reduced.
+        'permissions.can_manage_shops': false,
+        'permissions.can_manage_roles': false,
+        'permissions.can_view_all_staff': false,
+      },
+    });
+
+    const adjustedRecord = await Attendance.create({
+      user_id: fixtures.users.staffUser._id,
+      shop_id: fixtures.shops.mainShop._id,
+      punch_in: new Date('2026-03-22T09:00:00.000Z'),
+      punch_out: new Date('2026-03-22T17:00:00.000Z'),
+      effective_start: new Date('2026-03-22T10:00:00.000Z'),
+      effective_end: new Date('2026-03-22T16:00:00.000Z'),
+      effective_minutes: 360,
+      effective_source: 'Adjusted',
+      punch_method: 'GPS+Biometric',
+    });
+
+    await Attendance.create({
+      user_id: fixtures.users.managerUser._id,
+      shop_id: fixtures.shops.eastShop._id,
+      punch_in: new Date(),
+      punch_out: new Date(Date.now() + 30 * 60 * 1000),
+      punch_method: 'GPS+Biometric',
+    });
+
+    const res = await request(app)
+      .get('/api/attendance?page=1&limit=50')
+      .set('Authorization', `Bearer ${adminLogin.token}`);
+
+    expectEnvelope(res, 200);
+    const seesMain = res.body.data.records.some(
+      (item) => item.shop_id?._id === fixtures.shops.mainShop._id.toString()
+    );
+    const seesEast = res.body.data.records.some(
+      (item) => item.shop_id?._id === fixtures.shops.eastShop._id.toString()
+    );
+    expect(seesMain).toBe(true);
+    expect(seesEast).toBe(true);
+
+    const adjustedDto = res.body.data.records.find(
+      (item) => item._id === adjustedRecord._id.toString()
+    );
+    expect(adjustedDto).toBeTruthy();
+    expect(adjustedDto.punch_in).toBe('2026-03-22T10:00:00.000Z');
+    expect(adjustedDto.punch_out).toBe('2026-03-22T16:00:00.000Z');
+  });
+
+  it('ATT-034: lowercase admin role_name still gets admin attendance visibility', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+
+    await Role.findByIdAndUpdate(fixtures.roles.adminRole._id, {
+      $set: {
+        role_name: 'admin',
+        'permissions.can_manage_shops': false,
+        'permissions.can_manage_roles': false,
+        'permissions.can_view_all_staff': false,
+      },
+    });
+    await User.findByIdAndUpdate(fixtures.users.adminUser._id, {
+      assigned_shop_ids: [],
+      shop_id: null,
+      active_shop_id: null,
+    });
+
+    await Attendance.create({
+      user_id: fixtures.users.staffUser._id,
+      shop_id: fixtures.shops.mainShop._id,
+      punch_in: new Date(),
+      punch_out: new Date(Date.now() + 45 * 60 * 1000),
+      punch_method: 'GPS+Biometric',
+    });
+
+    const res = await request(app)
+      .get('/api/attendance?page=1&limit=10')
+      .set('Authorization', `Bearer ${adminLogin.token}`);
+
+    expectEnvelope(res, 200);
+    expect(res.body.data.total).toBeGreaterThan(0);
+  });
+
+  it('ATT-035: summary-by-user groups attendance and returns total work hours', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+
+    await Attendance.insertMany([
+      {
+        user_id: fixtures.users.staffUser._id,
+        shop_id: fixtures.shops.mainShop._id,
+        punch_in: new Date('2026-03-26T09:00:00.000Z'),
+        punch_out: new Date('2026-03-26T17:00:00.000Z'),
+        effective_start: new Date('2026-03-26T10:00:00.000Z'),
+        effective_end: new Date('2026-03-26T16:00:00.000Z'),
+        effective_minutes: 360,
+        effective_source: 'Adjusted',
+        punch_method: 'GPS+Biometric',
+      },
+      {
+        user_id: fixtures.users.managerUser._id,
+        shop_id: fixtures.shops.mainShop._id,
+        punch_in: new Date('2026-03-26T08:00:00.000Z'),
+        punch_out: new Date('2026-03-26T12:00:00.000Z'),
+        punch_method: 'GPS+Biometric',
+      },
+    ]);
+
+    const res = await request(app)
+      .get('/api/attendance/summary-by-user')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({
+        shop_id: fixtures.shops.mainShop._id.toString(),
+        from_date: '2026-03-01T00:00:00.000Z',
+        to_date: '2026-04-30T00:00:00.000Z',
+      });
+
+    expectEnvelope(res, 200);
+    expect(Array.isArray(res.body.data.users)).toBe(true);
+
+    const staffSummary = res.body.data.users.find(
+      (item) => item.user_id === fixtures.users.staffUser._id.toString()
+    );
+    const managerSummary = res.body.data.users.find(
+      (item) => item.user_id === fixtures.users.managerUser._id.toString()
+    );
+
+    expect(staffSummary).toBeTruthy();
+    expect(managerSummary).toBeTruthy();
+    expect(staffSummary.total_work_hours).toBe(6);
+    expect(staffSummary.total_actual_hours).toBe(8);
+    expect(managerSummary.total_work_hours).toBe(4);
+    expect(managerSummary.total_actual_hours).toBe(4);
   });
 });

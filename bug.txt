@@ -16,4 +16,10 @@ To implement the functionality for viewing attendance records and rotas based on
 
 
 create rota api bug : create rota for only future date not past date
-make api for view attandance record in selected date and also show total hours of work done by eash employee in that date range
+make api for view attendance record in selected date and also show total hours of work done by eash employee in that date range
+
+update get attendance api response for normal user and staff and admin also dont give all fields to them
+
+admin not able to get any attendance record need to check that
+
+add shopId in get attendance api

@@ -117,6 +117,14 @@ const updateShop = asyncHandler(async (req, res) => {
 
   const prevOpening = shop.opening_time;
   const prevClosing = shop.closing_time;
+  const hasOpening = Object.prototype.hasOwnProperty.call(req.body, 'opening_time');
+  const hasClosing = Object.prototype.hasOwnProperty.call(req.body, 'closing_time');
+
+  // Keep parity with the dedicated /hours endpoint when updating hours via /:id.
+  if (hasOpening !== hasClosing) {
+    throw new AppError('opening_time and closing_time are required together', 400);
+  }
+
   const nextOpening = normalizeTime(req.body.opening_time);
   const nextClosing = normalizeTime(req.body.closing_time);
 
@@ -135,7 +143,7 @@ const updateShop = asyncHandler(async (req, res) => {
       openingTime: nextOpening || shop.opening_time,
       closingTime: nextClosing || shop.closing_time,
       changedBy: req.user?._id || null,
-      note: req.body?.time_change_note || 'Shop operating hours updated',
+      note: req.body?.note || req.body?.time_change_note || 'Shop operating hours updated',
     });
   }
 

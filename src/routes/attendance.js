@@ -6,6 +6,7 @@ const {
   punchOut,
   manualPunchIn,
   getAttendance,
+  getAttendanceSummaryByUser,
   getEligibleRotas,
   reconcileAllOverdue,
   reconcileSelfOverdue,
@@ -326,6 +327,53 @@ router.post('/manual-punch-in', protect, requirePermission('can_manual_punch'), 
  *         description: Attendance record not found
  */
 router.put('/:id/punch-out', protect, punchOut);
+
+/**
+ * @swagger
+ * /api/attendance/summary-by-user:
+ *   get:
+ *     summary: Group attendance by user with total work hours
+ *     tags: [Attendance]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: shop_id
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: from_date
+ *         schema:
+ *           type: string
+ *           format: date-time
+ *       - in: query
+ *         name: to_date
+ *         schema:
+ *           type: string
+ *           format: date-time
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: sort_by
+ *         schema:
+ *           type: string
+ *           enum: [total_work_hours, name]
+ *       - in: query
+ *         name: sort_dir
+ *         schema:
+ *           type: string
+ *           enum: [asc, desc]
+ *     responses:
+ *       200:
+ *         description: Grouped attendance summary by user
+ */
+router.get('/summary-by-user', protect, getAttendanceSummaryByUser);
 
 /**
  * @swagger

@@ -684,7 +684,7 @@
           }
         },
         {
-          "name": "Update Shop (radius)",
+          "name": "Update Shop (general)",
           "request": {
             "method": "PUT",
             "header": [
@@ -696,6 +696,27 @@
             "body": {
               "mode": "raw",
               "raw": "{\n  \"geofence_radius_m\": 200\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/shops/{{shop_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "shops", "{{shop_id}}"]
+            }
+          }
+        },
+        {
+          "name": "Update Shop Hours via Update Shop (Admin)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"opening_time\": \"09:00\",\n  \"closing_time\": \"21:00\",\n  \"note\": \"Seasonal timing update via /shops/:id\"\n}"
             },
             "url": {
               "raw": "{{base_url}}/api/shops/{{shop_id}}",
@@ -1133,6 +1154,64 @@
                 {
                   "key": "shop_id",
                   "value": "{{shop_id}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Attendance by Shop (Admin, paginated, no date filters)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/attendance?shop_id={{shop_id}}&page=1&limit=10",
+              "host": ["{{base_url}}"],
+              "path": ["api", "attendance"],
+              "query": [
+                {
+                  "key": "shop_id",
+                  "value": "{{shop_id}}"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "10"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Attendance Summary by User",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/attendance/summary-by-user?shop_id={{shop_id}}&from_date={{from_date}}&to_date={{to_date}}&page=1&limit=10",
+              "host": ["{{base_url}}"],
+              "path": ["api", "attendance", "summary-by-user"],
+              "query": [
+                {
+                  "key": "shop_id",
+                  "value": "{{shop_id}}"
+                },
+                {
+                  "key": "from_date",
+                  "value": "{{from_date}}"
+                },
+                {
+                  "key": "to_date",
+                  "value": "{{to_date}}"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "10"
                 }
               ]
             }

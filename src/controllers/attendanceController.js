@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const mongoose = require('mongoose');
 const Attendance = require('../models/Attendance');
 const Rota = require('../models/Rota');
 const User = require('../models/User');
@@ -53,6 +54,11 @@ function subtractDays(dateValue, days) {
   const d = new Date(dateValue);
   d.setUTCDate(d.getUTCDate() - days);
   return d;
+}
+
+function toObjectIdIfValid(value) {
+  if (!value || typeof value !== 'string') return value;
+  return mongoose.Types.ObjectId.isValid(value) ? new mongoose.Types.ObjectId(value) : value;
 }
 
 function normalizeId(value) {
@@ -158,6 +164,17 @@ function formatGap(gap) {
   };
 }
 
+function formatGapLabel(gap) {
+  const start = new Date(gap.start).toISOString().slice(0, 16).replace('T', ' ');
+  const end = new Date(gap.end).toISOString().slice(0, 16).replace('T', ' ');
+  return `${start} to ${end} UTC (${gap.minutes}m uncovered)`;
+}
+
+function minutesFromRange(start, end) {
+  if (!start || !end) return 0;
+  return Math.max(0, Math.round((new Date(end).getTime() - new Date(start).getTime()) / 60000));
+}
+
 function resolveShopHoursForInstant(shop, instant) {
   const history = Array.isArray(shop.shop_time_history) ? shop.shop_time_history : [];
   const at = new Date(instant);
@@ -188,6 +205,34 @@ function resolveShopHoursForInstant(shop, instant) {
   };
 }
 
+function buildShopCoverageWindows(shop, rangeStart, rangeEnd) {
+  const windows = [];
+  let requiredCoverageMinutes = 0;
+
+  eachUtcDay(rangeStart, rangeEnd).forEach((day) => {
+    const dayHours = resolveShopHoursForInstant(shop, day);
+    const openMinute = parseHHMMToMinutes(dayHours.opening_time);
+    const closeMinute = parseHHMMToMinutes(dayHours.closing_time);
+    if (openMinute === null || closeMinute === null || closeMinute <= openMinute) {
+      throw new AppError('Shop opening_time/closing_time are invalid for coverage checks', 400);
+    }
+
+    const windowStart = combineDateWithMinuteOffset(day, openMinute);
+    const windowEnd = combineDateWithMinuteOffset(day, closeMinute);
+
+    if (windowEnd <= rangeStart || windowStart >= rangeEnd) return;
+
+    const start = new Date(Math.max(windowStart.getTime(), rangeStart.getTime()));
+    const end = new Date(Math.min(windowEnd.getTime(), rangeEnd.getTime()));
+    if (end <= start) return;
+
+    windows.push({ start, end });
+    requiredCoverageMinutes += Math.round((end.getTime() - start.getTime()) / 60000);
+  });
+
+  return { windows, requiredCoverageMinutes };
+}
+
 async function assertShopHasContinuousCoverage({
   shopId,
   rangeStart,
@@ -205,26 +250,9 @@ async function assertShopHasContinuousCoverage({
     punch_out: { $ne: null, $gte: rangeStart },
   }).select('user_id punch_in punch_out effective_start effective_end');
 
+  const { windows, requiredCoverageMinutes } = buildShopCoverageWindows(shop, rangeStart, rangeEnd);
   const gaps = [];
-  eachUtcDay(rangeStart, rangeEnd).forEach((day) => {
-    const dayHours = resolveShopHoursForInstant(shop, day);
-    const openMinute = parseHHMMToMinutes(dayHours.opening_time);
-    const closeMinute = parseHHMMToMinutes(dayHours.closing_time);
-    if (openMinute === null || closeMinute === null || closeMinute <= openMinute) {
-      throw new AppError('Shop opening_time/closing_time are invalid for coverage checks', 400);
-    }
-
-    const windowStart = combineDateWithMinuteOffset(day, openMinute);
-    const windowEnd = combineDateWithMinuteOffset(day, closeMinute);
-
-    if (windowEnd <= rangeStart || windowStart >= rangeEnd) {
-      return;
-    }
-
-    const checkStart = new Date(Math.max(windowStart.getTime(), rangeStart.getTime()));
-    const checkEnd = new Date(Math.min(windowEnd.getTime(), rangeEnd.getTime()));
-    if (checkEnd <= checkStart) return;
-
+  windows.forEach(({ start: checkStart, end: checkEnd }) => {
     const intervals = records.map((record) => {
       const key = String(record._id);
       const override = effectiveOverridesByAttendanceId.get(key);
@@ -246,13 +274,66 @@ async function assertShopHasContinuousCoverage({
   });
 
   if (gaps.length > 0) {
+    // Simple estimate based on total allocated minutes, not exact placement/overlap.
+    const naiveAllocatedMinutes = records.reduce((sum, record) => {
+      const key = String(record._id);
+      const override = effectiveOverridesByAttendanceId.get(key);
+      const effectiveStart = override?.effective_start || record.effective_start || record.punch_in;
+      const effectiveEnd = override?.effective_end || record.effective_end || record.punch_out;
+      return sum + minutesFromRange(effectiveStart, effectiveEnd);
+    }, 0);
+
+    const totalMissingMinutes = gaps.reduce((sum, gap) => sum + (gap.minutes || 0), 0);
+    const previewGaps = gaps.slice(0, 10);
+    const firstGap = previewGaps[0] || null;
+    const coveredMinutesAfterAdjustment = Math.max(
+      0,
+      requiredCoverageMinutes - totalMissingMinutes
+    );
+    const naiveExpectedMissingMinutes = Math.max(
+      0,
+      requiredCoverageMinutes - naiveAllocatedMinutes
+    );
+
     throw new AppError(
       'Coverage check failed: adjustment leaves shop open-time gaps without staff',
       409,
       {
+        error_code: 'COVERAGE_GAP_AFTER_ADJUSTMENT',
         shop_id: normalizeId(shopId),
         shop_name: shop.name,
-        gaps: gaps.slice(0, 10),
+        range_start: rangeStart.toISOString(),
+        range_end: rangeEnd.toISOString(),
+        required_coverage_hours: toHours(requiredCoverageMinutes),
+        achievable_coverage_hours_after_adjustment: toHours(coveredMinutesAfterAdjustment),
+        expected_missing_if_even_distribution_hours: toHours(naiveExpectedMissingMinutes),
+        total_missing_minutes: totalMissingMinutes,
+        total_missing_hours: toHours(totalMissingMinutes),
+        gaps_count: gaps.length,
+        gaps: previewGaps,
+        uncovered_windows_preview: previewGaps.slice(0, 3).map(formatGapLabel),
+        summary: `There are ${gaps.length} uncovered window(s) totalling ${toHours(totalMissingMinutes)} hours in the selected date range.`,
+        possible_solutions: [
+          `Increase combined target hours by at least ${toHours(totalMissingMinutes)}h in this range.`,
+          firstGap
+            ? `Ensure at least one user covers ${formatGapLabel(firstGap)}.`
+            : 'Ensure at least one user covers each uncovered window.',
+          'Reduce the selected date range to days that already have attendance coverage.',
+          'Add missing attendance/rota records for uncovered windows, then re-run adjustment.',
+        ],
+        notes: {
+          required_coverage_hours:
+            'Total shop open hours in selected date range that must be covered.',
+          achievable_coverage_hours_after_adjustment:
+            'Exact covered hours after applying current adjustment plan and overlap checks.',
+          expected_missing_if_even_distribution_hours:
+            'Naive estimate if allocated minutes were spread ideally; actual missing can be higher due to overlaps/day placement.',
+          total_missing_hours: 'Exact uncovered open hours after applying current adjustment plan.',
+          gaps: 'Exact uncovered time windows (UTC) that need staffing coverage.',
+          possible_solutions: 'Suggested actions admin can take before retrying adjustment.',
+        },
+        admin_hint:
+          'Increase target hours, include more users, or reduce date range until uncovered windows are removed.',
       }
     );
   }
@@ -623,25 +704,31 @@ const manualPunchIn = asyncHandler(async (req, res) => {
 // ─────────────────────────────────────────────
 const getAttendance = asyncHandler(async (req, res) => {
   await runAutoPunchOutSweep();
-  const isRootViewer = req.user?.role_id?.role_name === 'Root';
+  const roleName = String(req.user?.role_id?.role_name || '')
+    .trim()
+    .toLowerCase();
+  const isRootViewer = roleName === 'root';
+  const isAdminViewer = roleName === 'admin';
+
   const scope = buildReadScope(req.user);
+  const isGlobalViewer = scope.mode === 'all' || isAdminViewer;
   const filter = {};
+  const requestedShopId = req.query.shop_id ? String(req.query.shop_id) : null;
   const { page, limit, skip, sort } = parsePagination(req.query, {
     defaultSortBy: 'punch_in',
     allowedSortBy: ['punch_in', 'punch_out', 'createdAt', 'updatedAt'],
   });
   let enforcedShopIds = null;
 
-  if (!isRootViewer && scope.mode === 'all') {
+  if (!isRootViewer && isGlobalViewer) {
     const shopScope = buildShopScope(req.user);
-    enforcedShopIds = Array.isArray(shopScope.ids) ? shopScope.ids : [];
-    if (enforcedShopIds.length === 0) {
-      return sendSuccess(res, 'Attendance records fetched successfully', {
-        ...toPageMeta(0, page, limit, 0),
-        records: [],
-      });
+    enforcedShopIds = Array.isArray(shopScope.ids) ? shopScope.ids.map((id) => String(id)) : [];
+
+    // Admin/global viewers can read all shops by default.
+    // Keep `enforcedShopIds` only for non-admin global roles.
+    if (!isAdminViewer && !requestedShopId && enforcedShopIds.length > 0) {
+      filter.shop_id = { $in: enforcedShopIds };
     }
-    filter.shop_id = { $in: enforcedShopIds };
   } else if (scope.mode === 'self') {
     filter.user_id = req.user._id;
   } else if (scope.mode === 'shops') {
@@ -671,18 +758,23 @@ const getAttendance = asyncHandler(async (req, res) => {
       dateFilter.$lte = toDate;
     }
 
-    if (!isRootViewer) {
+    if (!isGlobalViewer) {
       if (!dateFilter.$gte || dateFilter.$gte < thirtyDayFloor) {
         dateFilter.$gte = thirtyDayFloor;
       }
     }
 
     filter.punch_in = dateFilter;
-  } else if (!isRootViewer) {
+  } else if (!isGlobalViewer) {
     filter.punch_in = { $gte: thirtyDayFloor };
   }
-  if (req.query.shop_id) {
-    if (enforcedShopIds && !enforcedShopIds.includes(req.query.shop_id)) {
+  if (requestedShopId) {
+    if (
+      !isAdminViewer &&
+      enforcedShopIds &&
+      enforcedShopIds.length > 0 &&
+      !enforcedShopIds.includes(requestedShopId)
+    ) {
       return sendSuccess(res, 'Attendance records fetched successfully', {
         ...toPageMeta(0, page, limit, 0),
         records: [],
@@ -691,14 +783,14 @@ const getAttendance = asyncHandler(async (req, res) => {
     if (
       scope.mode === 'shops' &&
       !scope.shopScope.all &&
-      !isShopAllowed(scope.shopScope, req.query.shop_id)
+      !isShopAllowed(scope.shopScope, requestedShopId)
     ) {
       return sendSuccess(res, 'Attendance records fetched successfully', {
         ...toPageMeta(0, page, limit, 0),
         records: [],
       });
     }
-    filter.shop_id = req.query.shop_id;
+    filter.shop_id = requestedShopId;
   }
 
   const [total, records] = await Promise.all([
@@ -745,6 +837,192 @@ const getAttendance = asyncHandler(async (req, res) => {
     actual_hours_total: toHours(actualMinutes),
     adjusted_hours_total: toHours(adjustedMinutes),
     records: visibleRecords,
+  });
+});
+
+// GET grouped attendance summary by user
+// GET /api/attendance/summary-by-user
+const getAttendanceSummaryByUser = asyncHandler(async (req, res) => {
+  await runAutoPunchOutSweep();
+  const roleName = String(req.user?.role_id?.role_name || '')
+    .trim()
+    .toLowerCase();
+  const isRootViewer = roleName === 'root';
+  const isAdminViewer = roleName === 'admin';
+
+  const scope = buildReadScope(req.user);
+  const isGlobalViewer = scope.mode === 'all' || isAdminViewer;
+  const filter = {};
+  const requestedShopId = req.query.shop_id ? String(req.query.shop_id) : null;
+  const { page, limit, skip } = parsePagination(req.query, {
+    defaultSortBy: 'createdAt',
+    allowedSortBy: ['createdAt'],
+  });
+  const sortBy = String(req.query.sort_by || 'total_work_hours').trim();
+  const sortDir = String(req.query.sort_dir || 'desc').toLowerCase() === 'asc' ? 1 : -1;
+  let enforcedShopIds = null;
+
+  if (!isRootViewer && isGlobalViewer) {
+    const shopScope = buildShopScope(req.user);
+    enforcedShopIds = Array.isArray(shopScope.ids) ? shopScope.ids.map((id) => String(id)) : [];
+
+    if (!isAdminViewer && !requestedShopId && enforcedShopIds.length > 0) {
+      filter.shop_id = { $in: enforcedShopIds };
+    }
+  } else if (scope.mode === 'self') {
+    filter.user_id = req.user._id;
+  } else if (scope.mode === 'shops') {
+    if (!scope.shopScope.all && scope.shopScope.ids.length === 0) {
+      return sendSuccess(res, 'Attendance summary by user fetched successfully', {
+        ...toPageMeta(0, page, limit, 0),
+        from_date: req.query.from_date || null,
+        to_date: req.query.to_date || null,
+        users: [],
+      });
+    }
+    if (!scope.shopScope.all) {
+      filter.shop_id = { $in: scope.shopScope.ids };
+    }
+  }
+
+  if (req.query.user_id && scope.mode !== 'self') filter.user_id = req.query.user_id;
+  const thirtyDayFloor = subtractDays(new Date(), 30);
+  if (req.query.from_date || req.query.to_date) {
+    const dateFilter = {};
+    if (req.query.from_date) {
+      const fromDate = toUtcStartOfDay(req.query.from_date);
+      if (!fromDate) throw new AppError('from_date must be a valid ISO date', 400);
+      dateFilter.$gte = fromDate;
+    }
+    if (req.query.to_date) {
+      const toDate = toUtcEndOfDay(req.query.to_date);
+      if (!toDate) throw new AppError('to_date must be a valid ISO date', 400);
+      dateFilter.$lte = toDate;
+    }
+
+    if (!isGlobalViewer) {
+      if (!dateFilter.$gte || dateFilter.$gte < thirtyDayFloor) {
+        dateFilter.$gte = thirtyDayFloor;
+      }
+    }
+
+    filter.punch_in = dateFilter;
+  } else if (!isGlobalViewer) {
+    filter.punch_in = { $gte: thirtyDayFloor };
+  }
+
+  if (requestedShopId) {
+    if (
+      !isAdminViewer &&
+      enforcedShopIds &&
+      enforcedShopIds.length > 0 &&
+      !enforcedShopIds.includes(requestedShopId)
+    ) {
+      return sendSuccess(res, 'Attendance summary by user fetched successfully', {
+        ...toPageMeta(0, page, limit, 0),
+        from_date: req.query.from_date || null,
+        to_date: req.query.to_date || null,
+        users: [],
+      });
+    }
+    if (
+      scope.mode === 'shops' &&
+      !scope.shopScope.all &&
+      !isShopAllowed(scope.shopScope, requestedShopId)
+    ) {
+      return sendSuccess(res, 'Attendance summary by user fetched successfully', {
+        ...toPageMeta(0, page, limit, 0),
+        from_date: req.query.from_date || null,
+        to_date: req.query.to_date || null,
+        users: [],
+      });
+    }
+    filter.shop_id = requestedShopId;
+  }
+
+  const match = { ...filter };
+  if (typeof match.user_id === 'string') match.user_id = toObjectIdIfValid(match.user_id);
+  if (typeof match.shop_id === 'string') match.shop_id = toObjectIdIfValid(match.shop_id);
+  if (match.shop_id?.$in) {
+    match.shop_id = { $in: match.shop_id.$in.map((id) => toObjectIdIfValid(String(id))) };
+  }
+
+  const actualMinutesExpr = {
+    $cond: [
+      { $and: [{ $ne: ['$punch_in', null] }, { $ne: ['$punch_out', null] }] },
+      { $divide: [{ $subtract: ['$punch_out', '$punch_in'] }, 60000] },
+      0,
+    ],
+  };
+
+  const workMinutesExpr = isRootViewer
+    ? actualMinutesExpr
+    : {
+        $ifNull: ['$effective_minutes', { $ifNull: ['$adjusted_minutes', actualMinutesExpr] }],
+      };
+
+  const sortStage =
+    sortBy === 'name'
+      ? { name: sortDir, total_work_minutes: -1 }
+      : { total_work_minutes: sortDir, name: 1 };
+
+  const [result] = await Attendance.aggregate([
+    { $match: match },
+    {
+      $group: {
+        _id: '$user_id',
+        records_count: { $sum: 1 },
+        total_actual_minutes: { $sum: { $max: [0, actualMinutesExpr] } },
+        total_work_minutes: { $sum: { $max: [0, workMinutesExpr] } },
+      },
+    },
+    {
+      $lookup: {
+        from: 'users',
+        localField: '_id',
+        foreignField: '_id',
+        as: 'user',
+      },
+    },
+    { $unwind: { path: '$user', preserveNullAndEmptyArrays: true } },
+    {
+      $project: {
+        _id: 0,
+        user_id: '$_id',
+        name: { $ifNull: ['$user.name', null] },
+        email: { $ifNull: ['$user.email', null] },
+        records_count: 1,
+        total_actual_minutes: 1,
+        total_work_minutes: 1,
+      },
+    },
+    { $sort: sortStage },
+    {
+      $facet: {
+        meta: [{ $count: 'total' }],
+        data: [{ $skip: skip }, { $limit: limit }],
+      },
+    },
+  ]);
+
+  const total = result?.meta?.[0]?.total || 0;
+  const users = (result?.data || []).map((item) => ({
+    user_id: String(item.user_id),
+    name: item.name,
+    email: item.email,
+    records_count: item.records_count,
+    total_work_hours: toHours(item.total_work_minutes),
+    total_actual_hours: toHours(item.total_actual_minutes),
+  }));
+
+  return sendSuccess(res, 'Attendance summary by user fetched successfully', {
+    ...toPageMeta(total, page, limit, users.length),
+    from_date: req.query.from_date || null,
+    to_date: req.query.to_date || null,
+    shop_id: requestedShopId,
+    sort_by: sortBy,
+    sort_dir: sortDir === 1 ? 'asc' : 'desc',
+    users,
   });
 });
 
@@ -859,10 +1137,11 @@ const applyClosedAttendanceAdjustment = asyncHandler(async (req, res) => {
     effectiveOverridesByAttendanceId: applyOverrides,
   });
 
-  await Attendance.bulkWrite(
+  const applyWriteResult = await Attendance.bulkWrite(
     plan.allocations.map((item) => ({
       updateOne: {
         filter: { _id: item.attendanceId },
+        upsert: false,
         update: {
           $set: {
             adjusted_minutes: item.adjustedMinutes,
@@ -879,6 +1158,25 @@ const applyClosedAttendanceAdjustment = asyncHandler(async (req, res) => {
     })),
     { ordered: false }
   );
+
+  const expectedUpdates = plan.allocations.length;
+  const matchedUpdates =
+    applyWriteResult?.matchedCount ??
+    applyWriteResult?.result?.nMatched ??
+    applyWriteResult?.nMatched ??
+    0;
+  if (matchedUpdates < expectedUpdates) {
+    throw new AppError(
+      'Adjustment aborted: some attendance records no longer exist for update',
+      409,
+      {
+        error_code: 'ATTENDANCE_ADJUST_UPDATE_MISMATCH',
+        expected_updates: expectedUpdates,
+        matched_updates: matchedUpdates,
+        missing_updates: expectedUpdates - matchedUpdates,
+      }
+    );
+  }
 
   return sendSuccess(res, 'Attendance hours adjustment applied successfully', {
     user_id,
@@ -997,43 +1295,105 @@ const bulkAdjustClosedAttendanceByShop = asyncHandler(async (req, res) => {
     );
   }
 
-  const updates = [];
-  const bulkOverrides = new Map();
+  const allocationEntries = [];
+  const baseOverrides = new Map();
   plans.forEach((entry) => {
     entry.plan.allocations.forEach((item) => {
-      bulkOverrides.set(String(item.attendanceId), {
+      allocationEntries.push({ item, note: entry.note || null });
+      baseOverrides.set(String(item.attendanceId), {
         effective_start: item.effective_start,
         effective_end: item.effective_end,
-      });
-      updates.push({
-        updateOne: {
-          filter: { _id: item.attendanceId },
-          update: {
-            $set: {
-              adjusted_minutes: item.adjustedMinutes,
-              adjusted_at: new Date(),
-              adjusted_by: req.user._id,
-              adjustment_note: entry.note || null,
-              effective_start: item.effective_start,
-              effective_end: item.effective_end,
-              effective_minutes: item.effective_minutes,
-              effective_source: item.effective_source,
-            },
-          },
-        },
+        effective_source: item.effective_source,
       });
     });
   });
+
+  const shopForCoverage = await Shop.findById(shop_id).select(
+    'opening_time closing_time shop_time_history'
+  );
+  if (!shopForCoverage) {
+    throw new AppError('Shop not found', 404);
+  }
+
+  const { requiredCoverageMinutes } = buildShopCoverageWindows(
+    shopForCoverage,
+    rangeStart,
+    rangeEnd
+  );
+  const totalAdjustedMinutes = allocationEntries.reduce(
+    (sum, entry) => sum + Math.max(0, Number(entry.item.adjustedMinutes) || 0),
+    0
+  );
+
+  if (totalAdjustedMinutes < requiredCoverageMinutes) {
+    throw new AppError(
+      'Coverage check failed: total target hours are below required shop open coverage',
+      409,
+      {
+        error_code: 'INSUFFICIENT_TARGET_HOURS_FOR_COVERAGE',
+        shop_id,
+        range_start: rangeStart.toISOString(),
+        range_end: rangeEnd.toISOString(),
+        required_coverage_hours: toHours(requiredCoverageMinutes),
+        requested_target_hours_total: toHours(totalAdjustedMinutes),
+        missing_hours: toHours(requiredCoverageMinutes - totalAdjustedMinutes),
+      }
+    );
+  }
+
+  // Keep adjustments anchored to each record's own punch-in/punch-out window.
+  const finalOverrides = baseOverrides;
 
   await assertShopHasContinuousCoverage({
     shopId: shop_id,
     rangeStart,
     rangeEnd,
-    effectiveOverridesByAttendanceId: bulkOverrides,
+    effectiveOverridesByAttendanceId: finalOverrides,
+  });
+
+  const updates = allocationEntries.map(({ item, note: itemNote }) => {
+    const override = finalOverrides.get(String(item.attendanceId));
+    return {
+      updateOne: {
+        filter: { _id: item.attendanceId },
+        upsert: false,
+        update: {
+          $set: {
+            adjusted_minutes: item.adjustedMinutes,
+            adjusted_at: new Date(),
+            adjusted_by: req.user._id,
+            adjustment_note: itemNote,
+            effective_start: override?.effective_start || item.effective_start,
+            effective_end: override?.effective_end || item.effective_end,
+            effective_minutes: item.effective_minutes,
+            effective_source: override?.effective_source || item.effective_source,
+          },
+        },
+      },
+    };
   });
 
   if (updates.length > 0) {
-    await Attendance.bulkWrite(updates, { ordered: false });
+    const bulkWriteResult = await Attendance.bulkWrite(updates, { ordered: false });
+    const expectedUpdates = updates.length;
+    const matchedUpdates =
+      bulkWriteResult?.matchedCount ??
+      bulkWriteResult?.result?.nMatched ??
+      bulkWriteResult?.nMatched ??
+      0;
+
+    if (matchedUpdates < expectedUpdates) {
+      throw new AppError(
+        'Bulk adjustment aborted: some attendance records no longer exist for update',
+        409,
+        {
+          error_code: 'ATTENDANCE_BULK_ADJUST_UPDATE_MISMATCH',
+          expected_updates: expectedUpdates,
+          matched_updates: matchedUpdates,
+          missing_updates: expectedUpdates - matchedUpdates,
+        }
+      );
+    }
   }
 
   return sendSuccess(res, 'Bulk attendance hours adjustment applied successfully', {
@@ -1046,6 +1406,7 @@ const bulkAdjustClosedAttendanceByShop = asyncHandler(async (req, res) => {
       adjusted_hours: toHours(plans.reduce((sum, item) => sum + item.plan.adjustedMinutesTotal, 0)),
       reduced_hours: toHours(plans.reduce((sum, item) => sum + item.plan.reducedMinutesTotal, 0)),
     },
+    coverage_rebalanced: false,
     users: plans.map((item) => ({
       user_id: item.user_id,
       records_count: item.plan.records.length,
@@ -1063,6 +1424,7 @@ module.exports = {
   punchOut,
   manualPunchIn,
   getAttendance,
+  getAttendanceSummaryByUser,
   getEligibleRotas,
   reconcileAllOverdue,
   reconcileSelfOverdue,
