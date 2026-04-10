@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const { randomUUID } = require('crypto');
 const mongoose = require('mongoose');
 const Attendance = require('../models/Attendance');
 const Rota = require('../models/Rota');
@@ -233,6 +234,104 @@ function buildShopCoverageWindows(shop, rangeStart, rangeEnd) {
   return { windows, requiredCoverageMinutes };
 }
 
+function pickUserWithMostRemaining(userIds, remainingMinutesByUser) {
+  let selected = null;
+  let maxRemaining = 0;
+
+  userIds.forEach((userId) => {
+    const remaining = Math.max(0, Number(remainingMinutesByUser.get(userId)) || 0);
+    if (remaining > maxRemaining) {
+      maxRemaining = remaining;
+      selected = userId;
+    }
+  });
+
+  return selected;
+}
+
+function mergeIntervals(intervals) {
+  if (!Array.isArray(intervals) || intervals.length === 0) return [];
+
+  const sorted = [...intervals].sort((a, b) => new Date(a.start) - new Date(b.start));
+  const merged = [{ start: new Date(sorted[0].start), end: new Date(sorted[0].end) }];
+
+  for (let i = 1; i < sorted.length; i += 1) {
+    const current = sorted[i];
+    const last = merged[merged.length - 1];
+    const currentStart = new Date(current.start);
+    const currentEnd = new Date(current.end);
+
+    if (currentStart.getTime() === last.end.getTime()) {
+      last.end = currentEnd;
+      continue;
+    }
+
+    merged.push({ start: currentStart, end: currentEnd });
+  }
+
+  return merged;
+}
+
+function buildBulkRegeneratedIntervals({ windows, userIds, targetMinutesByUser }) {
+  const allocationsByUser = new Map(userIds.map((userId) => [userId, []]));
+  const remainingMinutesByUser = new Map(
+    userIds.map((userId) => [userId, Math.max(0, Number(targetMinutesByUser.get(userId)) || 0)])
+  );
+
+  const gaps = [];
+  windows.forEach((window) => {
+    let cursor = new Date(window.start);
+    const windowEnd = new Date(window.end);
+
+    while (cursor < windowEnd) {
+      const selectedUser = pickUserWithMostRemaining(userIds, remainingMinutesByUser);
+      if (!selectedUser) {
+        gaps.push({ start: new Date(cursor), end: windowEnd });
+        break;
+      }
+
+      const available = Math.max(0, Number(remainingMinutesByUser.get(selectedUser)) || 0);
+      const needed = minutesFromRange(cursor, windowEnd);
+      const allocated = Math.min(available, needed);
+      if (allocated <= 0) {
+        gaps.push({ start: new Date(cursor), end: windowEnd });
+        break;
+      }
+
+      const segmentEnd = new Date(cursor.getTime() + allocated * 60000);
+      allocationsByUser.get(selectedUser).push({ start: new Date(cursor), end: segmentEnd });
+      remainingMinutesByUser.set(selectedUser, available - allocated);
+      cursor = segmentEnd;
+    }
+  });
+
+  userIds.forEach((userId) => {
+    let remaining = Math.max(0, Number(remainingMinutesByUser.get(userId)) || 0);
+    if (remaining <= 0) return;
+
+    while (remaining > 0) {
+      const beforePass = remaining;
+      for (const window of windows) {
+        if (remaining <= 0) break;
+        const windowMinutes = minutesFromRange(window.start, window.end);
+        if (windowMinutes <= 0) continue;
+
+        const allocated = Math.min(windowMinutes, remaining);
+        const segmentStart = new Date(window.start);
+        const segmentEnd = new Date(segmentStart.getTime() + allocated * 60000);
+        allocationsByUser.get(userId).push({ start: segmentStart, end: segmentEnd });
+        remaining -= allocated;
+      }
+
+      if (remaining === beforePass) break;
+    }
+
+    remainingMinutesByUser.set(userId, remaining);
+  });
+
+  return { allocationsByUser, remainingMinutesByUser, gaps };
+}
+
 async function assertShopHasContinuousCoverage({
   shopId,
   rangeStart,
@@ -246,6 +345,7 @@ async function assertShopHasContinuousCoverage({
 
   const records = await Attendance.find({
     shop_id: shopId,
+    is_active: { $ne: false },
     punch_in: { $lte: rangeEnd },
     punch_out: { $ne: null, $gte: rangeStart },
   }).select('user_id punch_in punch_out effective_start effective_end');
@@ -420,6 +520,7 @@ async function buildClosedAttendanceAdjustment({ userId, shopId, fromDate, toDat
   const records = await Attendance.find({
     user_id: userId,
     shop_id: shopId,
+    is_active: { $ne: false },
     punch_out: { $ne: null },
     punch_in: { $gte: rangeStart, $lte: rangeEnd },
   }).sort({ punch_in: 1 });
@@ -444,6 +545,7 @@ async function buildClosedAttendanceAdjustment({ userId, shopId, fromDate, toDat
 async function findShopUsersWithClosedAttendanceInRange({ shopId, fromDate, toDate }) {
   const records = await Attendance.find({
     shop_id: shopId,
+    is_active: { $ne: false },
     punch_out: { $ne: null },
     punch_in: { $gte: fromDate, $lte: toDate },
   }).select('user_id');
@@ -585,7 +687,11 @@ const punchIn = asyncHandler(async (req, res) => {
   }
 
   // 5. Check no open punch-in already exists
-  const existing = await Attendance.findOne({ user_id: req.user._id, punch_out: null });
+  const existing = await Attendance.findOne({
+    user_id: req.user._id,
+    punch_out: null,
+    is_active: { $ne: false },
+  });
   if (existing) {
     throw new AppError('Already punched in. Please punch out first.', 400);
   }
@@ -662,7 +768,11 @@ const manualPunchIn = asyncHandler(async (req, res) => {
   }
 
   // Check no open punch-in already exists
-  const existing = await Attendance.findOne({ user_id, punch_out: null });
+  const existing = await Attendance.findOne({
+    user_id,
+    punch_out: null,
+    is_active: { $ne: false },
+  });
   if (existing) {
     throw new AppError('Staff member is already punched in', 400);
   }
@@ -712,7 +822,7 @@ const getAttendance = asyncHandler(async (req, res) => {
 
   const scope = buildReadScope(req.user);
   const isGlobalViewer = scope.mode === 'all' || isAdminViewer;
-  const filter = {};
+  const filter = { is_active: { $ne: false } };
   const requestedShopId = req.query.shop_id ? String(req.query.shop_id) : null;
   const { page, limit, skip, sort } = parsePagination(req.query, {
     defaultSortBy: 'punch_in',
@@ -852,7 +962,7 @@ const getAttendanceSummaryByUser = asyncHandler(async (req, res) => {
 
   const scope = buildReadScope(req.user);
   const isGlobalViewer = scope.mode === 'all' || isAdminViewer;
-  const filter = {};
+  const filter = { is_active: { $ne: false } };
   const requestedShopId = req.query.shop_id ? String(req.query.shop_id) : null;
   const { page, limit, skip } = parsePagination(req.query, {
     defaultSortBy: 'createdAt',
@@ -1249,8 +1359,15 @@ const bulkAdjustClosedAttendanceByShop = asyncHandler(async (req, res) => {
     throw new AppError('to_date must be greater than or equal to from_date', 400);
   }
 
+  const shop = await Shop.findById(shop_id).select(
+    'name opening_time closing_time shop_time_history'
+  );
+  if (!shop) {
+    throw new AppError('Shop not found', 404);
+  }
+
   const seenUsers = new Set();
-  const plans = [];
+  const targetMinutesByUser = new Map();
   for (const adjustment of adjustments) {
     if (!adjustment?.user_id || adjustment?.target_hours === undefined) {
       throw new AppError('Each adjustment item requires user_id and target_hours', 400);
@@ -1261,19 +1378,30 @@ const bulkAdjustClosedAttendanceByShop = asyncHandler(async (req, res) => {
     }
     seenUsers.add(userId);
 
-    const plan = await buildClosedAttendanceAdjustment({
-      userId,
-      shopId: shop_id,
-      fromDate: from_date,
-      toDate: to_date,
-      targetHours: adjustment.target_hours,
-    });
+    const targetHoursNum = Number(adjustment.target_hours);
+    if (!Number.isFinite(targetHoursNum) || targetHoursNum < 0) {
+      throw new AppError(`target_hours must be a non-negative number for user ${userId}`, 400);
+    }
+    targetMinutesByUser.set(userId, Math.round(targetHoursNum * 60));
+  }
 
-    plans.push({
-      user_id: userId,
-      target_hours: Number(adjustment.target_hours),
-      note: adjustment.note || note,
-      plan,
+  const selectedUserIds = [...targetMinutesByUser.keys()];
+  const selectedUsers = await User.find({ _id: { $in: selectedUserIds }, is_active: true }).select(
+    '_id shop_id name email'
+  );
+  if (selectedUsers.length !== selectedUserIds.length) {
+    throw new AppError('Some selected users do not exist or are inactive', 404);
+  }
+
+  const invalidShopUser = selectedUsers.find(
+    (user) => normalizeId(user.shop_id) !== normalizeId(shop_id)
+  );
+  if (invalidShopUser) {
+    throw new AppError('All selected users must belong to the requested shop', 400, {
+      user_id: normalizeId(invalidShopUser._id),
+      user_email: invalidShopUser.email,
+      expected_shop_id: normalizeId(shop_id),
+      actual_shop_id: normalizeId(invalidShopUser.shop_id),
     });
   }
 
@@ -1283,8 +1411,8 @@ const bulkAdjustClosedAttendanceByShop = asyncHandler(async (req, res) => {
     toDate: rangeEnd,
   });
 
-  const selectedUsers = new Set(plans.map((plan) => String(plan.user_id)));
-  const unchangedUsers = usersInRange.filter((user) => !selectedUsers.has(String(user.user_id)));
+  const selectedUsersSet = new Set(selectedUserIds.map((id) => String(id)));
+  const unchangedUsers = usersInRange.filter((user) => !selectedUsersSet.has(String(user.user_id)));
   if (unchangedUsers.length > 0) {
     throw new AppError(
       'Some users in this shop/date range are not selected. Include all users or adjust your date range.',
@@ -1295,33 +1423,13 @@ const bulkAdjustClosedAttendanceByShop = asyncHandler(async (req, res) => {
     );
   }
 
-  const allocationEntries = [];
-  const baseOverrides = new Map();
-  plans.forEach((entry) => {
-    entry.plan.allocations.forEach((item) => {
-      allocationEntries.push({ item, note: entry.note || null });
-      baseOverrides.set(String(item.attendanceId), {
-        effective_start: item.effective_start,
-        effective_end: item.effective_end,
-        effective_source: item.effective_source,
-      });
-    });
-  });
-
-  const shopForCoverage = await Shop.findById(shop_id).select(
-    'opening_time closing_time shop_time_history'
-  );
-  if (!shopForCoverage) {
-    throw new AppError('Shop not found', 404);
+  const { windows, requiredCoverageMinutes } = buildShopCoverageWindows(shop, rangeStart, rangeEnd);
+  if (windows.length === 0) {
+    throw new AppError('No shop open-time windows found inside the selected date range', 400);
   }
 
-  const { requiredCoverageMinutes } = buildShopCoverageWindows(
-    shopForCoverage,
-    rangeStart,
-    rangeEnd
-  );
-  const totalAdjustedMinutes = allocationEntries.reduce(
-    (sum, entry) => sum + Math.max(0, Number(entry.item.adjustedMinutes) || 0),
+  const totalAdjustedMinutes = selectedUserIds.reduce(
+    (sum, userId) => sum + Math.max(0, Number(targetMinutesByUser.get(userId)) || 0),
     0
   );
 
@@ -1341,79 +1449,117 @@ const bulkAdjustClosedAttendanceByShop = asyncHandler(async (req, res) => {
     );
   }
 
-  // Keep adjustments anchored to each record's own punch-in/punch-out window.
-  const finalOverrides = baseOverrides;
-
-  await assertShopHasContinuousCoverage({
-    shopId: shop_id,
-    rangeStart,
-    rangeEnd,
-    effectiveOverridesByAttendanceId: finalOverrides,
+  const { allocationsByUser, gaps } = buildBulkRegeneratedIntervals({
+    windows,
+    userIds: selectedUserIds,
+    targetMinutesByUser,
   });
 
-  const updates = allocationEntries.map(({ item, note: itemNote }) => {
-    const override = finalOverrides.get(String(item.attendanceId));
-    return {
-      updateOne: {
-        filter: { _id: item.attendanceId },
-        upsert: false,
-        update: {
-          $set: {
-            adjusted_minutes: item.adjustedMinutes,
-            adjusted_at: new Date(),
-            adjusted_by: req.user._id,
-            adjustment_note: itemNote,
-            effective_start: override?.effective_start || item.effective_start,
-            effective_end: override?.effective_end || item.effective_end,
-            effective_minutes: item.effective_minutes,
-            effective_source: override?.effective_source || item.effective_source,
-          },
-        },
-      },
-    };
-  });
-
-  if (updates.length > 0) {
-    const bulkWriteResult = await Attendance.bulkWrite(updates, { ordered: false });
-    const expectedUpdates = updates.length;
-    const matchedUpdates =
-      bulkWriteResult?.matchedCount ??
-      bulkWriteResult?.result?.nMatched ??
-      bulkWriteResult?.nMatched ??
-      0;
-
-    if (matchedUpdates < expectedUpdates) {
-      throw new AppError(
-        'Bulk adjustment aborted: some attendance records no longer exist for update',
-        409,
-        {
-          error_code: 'ATTENDANCE_BULK_ADJUST_UPDATE_MISMATCH',
-          expected_updates: expectedUpdates,
-          matched_updates: matchedUpdates,
-          missing_updates: expectedUpdates - matchedUpdates,
-        }
-      );
-    }
+  if (gaps.length > 0) {
+    const formattedGaps = gaps.map(formatGap);
+    const totalMissingMinutes = formattedGaps.reduce((sum, gap) => sum + (gap.minutes || 0), 0);
+    throw new AppError(
+      'Coverage check failed: adjustment leaves shop open-time gaps without staff',
+      409,
+      {
+        error_code: 'COVERAGE_GAP_AFTER_ADJUSTMENT',
+        shop_id: normalizeId(shop_id),
+        shop_name: shop.name,
+        range_start: rangeStart.toISOString(),
+        range_end: rangeEnd.toISOString(),
+        required_coverage_hours: toHours(requiredCoverageMinutes),
+        achievable_coverage_hours_after_adjustment: toHours(
+          requiredCoverageMinutes - totalMissingMinutes
+        ),
+        expected_missing_if_even_distribution_hours: 0,
+        total_missing_minutes: totalMissingMinutes,
+        total_missing_hours: toHours(totalMissingMinutes),
+        gaps_count: formattedGaps.length,
+        gaps: formattedGaps.slice(0, 10),
+        uncovered_windows_preview: formattedGaps.slice(0, 3).map(formatGapLabel),
+      }
+    );
   }
+
+  const batchId = randomUUID();
+  const now = new Date();
+  const docsToInsert = [];
+
+  selectedUserIds.forEach((userId) => {
+    const merged = mergeIntervals(allocationsByUser.get(userId) || []);
+    merged.forEach((interval) => {
+      const mins = minutesFromRange(interval.start, interval.end);
+      if (mins <= 0) return;
+
+      docsToInsert.push({
+        user_id: userId,
+        shop_id,
+        punch_in: interval.start,
+        punch_out: interval.end,
+        punch_out_source: 'Manual',
+        is_manual: true,
+        manual_by: req.user._id,
+        punch_method: 'Manual',
+        adjusted_minutes: mins,
+        adjusted_at: now,
+        adjusted_by: req.user._id,
+        adjustment_note: note || null,
+        effective_start: interval.start,
+        effective_end: interval.end,
+        effective_minutes: mins,
+        effective_source: 'Adjusted',
+        is_active: true,
+        replacement_batch_id: batchId,
+      });
+    });
+  });
+
+  if (docsToInsert.length === 0) {
+    throw new AppError(
+      'No regenerated attendance records were produced from requested targets',
+      400
+    );
+  }
+
+  await Attendance.updateMany(
+    {
+      shop_id,
+      user_id: { $in: selectedUserIds },
+      is_active: { $ne: false },
+      punch_out: { $ne: null },
+      punch_in: { $gte: rangeStart, $lte: rangeEnd },
+    },
+    {
+      $set: {
+        is_active: false,
+        archived_at: now,
+        archived_by: req.user._id,
+        replacement_batch_id: batchId,
+      },
+    }
+  );
+
+  await Attendance.insertMany(docsToInsert);
 
   return sendSuccess(res, 'Bulk attendance hours adjustment applied successfully', {
     shop_id,
-    from_date,
-    to_date,
-    users_count: plans.length,
+    shop_name: shop.name,
+    from_date: rangeStart.toISOString(),
+    to_date: rangeEnd.toISOString(),
+    users_count: selectedUserIds.length,
+    batch_id: batchId,
     totals: {
-      actual_hours: toHours(plans.reduce((sum, item) => sum + item.plan.actualMinutesTotal, 0)),
-      adjusted_hours: toHours(plans.reduce((sum, item) => sum + item.plan.adjustedMinutesTotal, 0)),
-      reduced_hours: toHours(plans.reduce((sum, item) => sum + item.plan.reducedMinutesTotal, 0)),
+      required_coverage_hours: toHours(requiredCoverageMinutes),
+      target_hours: toHours(totalAdjustedMinutes),
+      regenerated_hours: toHours(
+        docsToInsert.reduce((sum, doc) => sum + Math.max(0, Number(doc.effective_minutes) || 0), 0)
+      ),
     },
-    coverage_rebalanced: false,
-    users: plans.map((item) => ({
-      user_id: item.user_id,
-      records_count: item.plan.records.length,
-      actual_hours: toHours(item.plan.actualMinutesTotal),
-      target_hours: item.target_hours,
-      adjusted_hours: toHours(item.plan.adjustedMinutesTotal),
-      reduced_hours: toHours(item.plan.reducedMinutesTotal),
+    coverage_rebalanced: true,
+    users: selectedUserIds.map((userId) => ({
+      user_id: userId,
+      target_hours: toHours(targetMinutesByUser.get(userId) || 0),
+      regenerated_records_count: mergeIntervals(allocationsByUser.get(userId) || []).length,
     })),
   });
 });

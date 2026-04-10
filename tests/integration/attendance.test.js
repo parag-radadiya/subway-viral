@@ -594,7 +594,7 @@ describe('Attendance module integration', () => {
       must_change_password: true,
     });
 
-    await Attendance.insertMany([
+    const originalRecords = await Attendance.insertMany([
       {
         user_id: fixtures.users.staffUser._id,
         shop_id: fixtures.shops.mainShop._id,
@@ -633,23 +633,52 @@ describe('Attendance module integration', () => {
     expectEnvelope(res, 200);
     expect(res.body.data.users_count).toBe(2);
 
+    const archived = await Attendance.find({
+      _id: { $in: originalRecords.map((item) => item._id) },
+    });
+    archived.forEach((record) => {
+      expect(record.is_active).toBe(false);
+      expect(record.archived_at).toBeTruthy();
+    });
+
     const adjusted = await Attendance.find({
       user_id: { $in: [fixtures.users.staffUser._id, extraStaff._id] },
+      is_active: { $ne: false },
       punch_in: { $gte: new Date('2026-03-18T00:00:00.000Z') },
       punch_out: { $ne: null },
-    }).sort({ user_id: 1 });
+    });
 
     expect(adjusted.length).toBeGreaterThanOrEqual(2);
     const targetByUser = {
       [fixtures.users.staffUser._id.toString()]: 480,
       [extraStaff._id.toString()]: 360,
     };
-    adjusted.forEach((record) => {
-      expect(record.adjusted_minutes).toBe(targetByUser[record.user_id.toString()]);
+
+    const totalsByUser = adjusted.reduce((acc, record) => {
+      const key = record.user_id.toString();
+      acc[key] = (acc[key] || 0) + (record.adjusted_minutes || 0);
       expect(record.effective_start).toBeTruthy();
       expect(record.effective_end).toBeTruthy();
-      expect(record.effective_minutes).toBe(targetByUser[record.user_id.toString()]);
+      expect(record.effective_minutes).toBe(record.adjusted_minutes);
+      return acc;
+    }, {});
+
+    Object.entries(targetByUser).forEach(([userId, minutes]) => {
+      expect(totalsByUser[userId]).toBe(minutes);
     });
+
+    const apiRes = await request(app)
+      .get(
+        `/api/attendance?shop_id=${fixtures.shops.mainShop._id.toString()}&from_date=2026-03-18&to_date=2026-03-18`
+      )
+      .set('Authorization', `Bearer ${adminLogin.token}`);
+
+    expectEnvelope(apiRes, 200);
+    const archivedIds = new Set(originalRecords.map((item) => item._id.toString()));
+    const visibleArchived = apiRes.body.data.records.filter((record) =>
+      archivedIds.has(record._id)
+    );
+    expect(visibleArchived.length).toBe(0);
   });
 
   it('ATT-026: bulk-by-shop adjustment fails when some users in date range are not selected', async () => {
