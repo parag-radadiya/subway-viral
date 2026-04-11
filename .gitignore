@@ -20,3 +20,6 @@ coverage/
 # IDE files
 .idea/
 
+# Local resource files
+resourse/
+

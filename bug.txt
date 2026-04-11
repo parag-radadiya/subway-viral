@@ -23,3 +23,5 @@ update get attendance api response for normal user and staff and admin also dont
 admin not able to get any attendance record need to check that
 
 add shopId in get attendance api
+
+add time base total hour in get attendance api response

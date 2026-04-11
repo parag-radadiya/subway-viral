@@ -1,0 +1,1020 @@
+const fs = require('fs');
+const path = require('path');
+const Shop = require('../models/Shop');
+const StoreReportEntry = require('../models/StoreReportEntry');
+const AppError = require('../utils/AppError');
+const asyncHandler = require('../utils/asyncHandler');
+const { sendSuccess } = require('../utils/response');
+const { buildShopScope, isShopAllowed } = require('../middleware/shopScopeMiddleware');
+
+const WEEKLY_NUMERIC_FIELDS = [
+  'sales',
+  'net',
+  'labour',
+  'vat18',
+  'royalties',
+  'foodCost22',
+  'commission',
+  'commissionPercentage',
+  'total',
+  'income',
+];
+
+const MONTHLY_NUMERIC_FIELDS = [
+  'grossSale',
+  'netSale',
+  'vat',
+  'vatPercent',
+  'customerCount',
+  'bidfood',
+  'bidfoodPercent',
+  'labourHour',
+  'labourCost',
+  'labourPercent',
+  'kioskPercent',
+  'totalCogs',
+  'revScoreQ1',
+];
+
+const REPORT_COLUMNS = {
+  weekly_financial: [
+    { key: 'shopName', label: 'Store' },
+    { key: 'weekNumber', label: 'Week #' },
+    { key: 'weekRange', label: 'Week Ending' },
+    { key: 'sales', label: 'Sales' },
+    { key: 'net', label: 'Net' },
+    { key: 'labour', label: 'Labour' },
+    { key: 'vat18', label: 'VAT 18%' },
+    { key: 'royalties', label: 'Royalties' },
+    { key: 'foodCost22', label: 'Food Cost 22%' },
+    { key: 'commission', label: 'Commision' },
+    { key: 'commissionPercentage', label: 'Commision Percentage' },
+    { key: 'total', label: 'Total' },
+    { key: 'income', label: 'Income' },
+  ],
+  monthly_store_kpi: [
+    { key: 'shopName', label: 'Store' },
+    { key: 'grossSale', label: 'Gross Sale' },
+    { key: 'netSale', label: 'Net Sale' },
+    { key: 'vat', label: 'Vat' },
+    { key: 'vatPercent', label: 'Vat %' },
+    { key: 'customerCount', label: 'Customer Count' },
+    { key: 'bidfood', label: 'Bidfood' },
+    { key: 'bidfoodPercent', label: 'Bidfood %' },
+    { key: 'labourHour', label: 'Labour Hour' },
+    { key: 'labourCost', label: 'Labour Cost' },
+    { key: 'labourPercent', label: 'Labour %' },
+    { key: 'kioskPercent', label: 'Kiosk %' },
+    { key: 'totalCogs', label: 'TOTAL COGS' },
+    { key: 'revScoreQ1', label: 'Rev Score Q1' },
+  ],
+};
+
+const normalizeText = (value) => String(value || '').trim();
+
+const normalizeStoreName = (value) => normalizeText(value).toLowerCase().replace(/\s+/g, ' ');
+
+const normalizeHeader = (value) => normalizeStoreName(value).replace(/[^a-z0-9]/g, '');
+
+function toMetricKey(headerLabel) {
+  const cleaned = normalizeText(headerLabel)
+    .replace(/%/g, ' percent ')
+    .replace(/#/g, ' number ')
+    .replace(/&/g, ' and ')
+    .replace(/\+/g, ' plus ');
+
+  const parts = cleaned
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (parts.length === 0) return null;
+
+  const [first, ...rest] = parts;
+  const camel = `${first}${rest.map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join('')}`;
+  return /^\d/.test(camel) ? `metric${camel}` : camel;
+}
+
+function collectAdditionalNumericMetrics(dataRow, headerRow, usedIndexes, reservedKeys) {
+  const extraMetrics = {};
+  const usedKeys = new Set(reservedKeys || []);
+
+  for (let col = 0; col < headerRow.length; col += 1) {
+    if (usedIndexes.has(col)) continue;
+
+    const headerLabel = headerRow[col];
+    const baseKey = toMetricKey(headerLabel);
+    if (!baseKey) continue;
+
+    const value = sanitizeNumber(dataRow[col]);
+    if (value === null) continue;
+
+    let key = baseKey;
+    let suffix = 2;
+    while (usedKeys.has(key)) {
+      key = `${baseKey}${suffix}`;
+      suffix += 1;
+    }
+
+    usedKeys.add(key);
+    extraMetrics[key] = value;
+  }
+
+  return extraMetrics;
+}
+
+const isTotalRow = (storeName) => {
+  const normalized = normalizeStoreName(storeName);
+  return normalized === 'total' || normalized.startsWith('total ');
+};
+
+const toMonthNumber = (monthName) => {
+  const months = {
+    jan: 1,
+    january: 1,
+    feb: 2,
+    february: 2,
+    mar: 3,
+    march: 3,
+    apr: 4,
+    april: 4,
+    may: 5,
+    jun: 6,
+    june: 6,
+    jul: 7,
+    july: 7,
+    aug: 8,
+    august: 8,
+    sep: 9,
+    sept: 9,
+    september: 9,
+    oct: 10,
+    october: 10,
+    nov: 11,
+    november: 11,
+    dec: 12,
+    december: 12,
+  };
+
+  return months[normalizeStoreName(monthName)] || null;
+};
+
+function parseMonthLabel(value) {
+  const raw = normalizeText(value);
+  if (!raw) return null;
+
+  const compact = raw.replace(/\s+/g, '');
+  const match = compact.match(/^([A-Za-z]{3,9})[-/](\d{2}|\d{4})$/);
+  if (!match) return null;
+
+  const month = toMonthNumber(match[1]);
+  if (!month) return null;
+  const yy = Number(match[2]);
+  const year = match[2].length === 2 ? 2000 + yy : yy;
+  return { year, month };
+}
+
+function sanitizeNumber(value) {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+
+  const raw = normalizeText(value);
+  if (!raw) return null;
+
+  const cleaned = raw.replace(/[^\d.-]/g, '');
+  if (!cleaned || cleaned === '-' || cleaned === '.' || cleaned === '-.') return null;
+
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function hasAnyValue(values) {
+  return values.some((value) => value !== null && value !== undefined);
+}
+
+function parseWeekRange(weekRange, fallbackYear) {
+  const raw = normalizeText(weekRange);
+  if (!raw) return null;
+
+  const match = raw.match(/(\d{1,2})\s*\/\s*(\d{1,2})\s*to\s*(\d{1,2})\s*\/\s*(\d{1,2})/i);
+  if (!match) return null;
+
+  const startDay = Number(match[1]);
+  const startMonth = Number(match[2]);
+  const endDay = Number(match[3]);
+  const endMonth = Number(match[4]);
+
+  if (startDay < 1 || startDay > 31 || endDay < 1 || endDay > 31) return null;
+  if (startMonth < 1 || startMonth > 12 || endMonth < 1 || endMonth > 12) return null;
+
+  const endYear = Number(fallbackYear);
+  const startYear = startMonth > endMonth ? endYear - 1 : endYear;
+
+  const weekStart = new Date(Date.UTC(startYear, startMonth - 1, startDay, 0, 0, 0, 0));
+  const weekEnd = new Date(Date.UTC(endYear, endMonth - 1, endDay, 23, 59, 59, 999));
+
+  if (Number.isNaN(weekStart.getTime()) || Number.isNaN(weekEnd.getTime())) return null;
+
+  return {
+    weekStart,
+    weekEnd,
+    year: weekEnd.getUTCFullYear(),
+    month: weekEnd.getUTCMonth() + 1,
+    weekRangeLabel: `${String(startDay).padStart(2, '0')}/${String(startMonth).padStart(2, '0')} to ${String(endDay).padStart(2, '0')}/${String(endMonth).padStart(2, '0')}`,
+  };
+}
+
+function toUtcDayStart(value) {
+  const d = new Date(value);
+  d.setUTCHours(0, 0, 0, 0);
+  return d;
+}
+
+function toUtcDayEnd(value) {
+  const d = new Date(value);
+  d.setUTCHours(23, 59, 59, 999);
+  return d;
+}
+
+function formatWeekRangeLabel(start, end) {
+  const startDay = String(start.getUTCDate()).padStart(2, '0');
+  const startMonth = String(start.getUTCMonth() + 1).padStart(2, '0');
+  const endDay = String(end.getUTCDate()).padStart(2, '0');
+  const endMonth = String(end.getUTCMonth() + 1).padStart(2, '0');
+  return `${startDay}/${startMonth} to ${endDay}/${endMonth}`;
+}
+
+function countInclusiveUtcDays(start, end) {
+  const dayMs = 24 * 60 * 60 * 1000;
+  const from = toUtcDayStart(start).getTime();
+  const to = toUtcDayStart(end).getTime();
+  return Math.floor((to - from) / dayMs) + 1;
+}
+
+function round2(value) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function splitMetricsByRatio(metrics, firstRatio) {
+  const first = {};
+  const second = {};
+
+  Object.entries(metrics || {}).forEach(([key, value]) => {
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      first[key] = value;
+      second[key] = value;
+      return;
+    }
+
+    const firstValue = round2(value * firstRatio);
+    const secondValue = round2(value - firstValue);
+    first[key] = firstValue;
+    second[key] = secondValue;
+  });
+
+  return { first, second };
+}
+
+function splitWeeklyRecordAcrossMonths(record) {
+  if (record.reportType !== 'weekly_financial' || !record.weekStart || !record.weekEnd) {
+    return [record];
+  }
+
+  const weekStart = toUtcDayStart(record.weekStart);
+  const weekEnd = toUtcDayEnd(record.weekEnd);
+
+  if (
+    weekStart.getUTCMonth() === weekEnd.getUTCMonth() &&
+    weekStart.getUTCFullYear() === weekEnd.getUTCFullYear()
+  ) {
+    return [
+      {
+        ...record,
+        year: weekEnd.getUTCFullYear(),
+        month: weekEnd.getUTCMonth() + 1,
+        weekStart,
+        weekEnd,
+        weekRangeLabel: record.weekRangeLabel || formatWeekRangeLabel(weekStart, weekEnd),
+      },
+    ];
+  }
+
+  const monthEnd = new Date(
+    Date.UTC(weekStart.getUTCFullYear(), weekStart.getUTCMonth() + 1, 0, 23, 59, 59, 999)
+  );
+  const nextMonthStart = new Date(
+    Date.UTC(weekEnd.getUTCFullYear(), weekEnd.getUTCMonth(), 1, 0, 0, 0, 0)
+  );
+
+  const totalDays = countInclusiveUtcDays(weekStart, weekEnd);
+  const firstDays = countInclusiveUtcDays(weekStart, monthEnd);
+  const firstRatio = firstDays / totalDays;
+  const splitMetrics = splitMetricsByRatio(record.metrics, firstRatio);
+
+  return [
+    {
+      ...record,
+      year: weekStart.getUTCFullYear(),
+      month: weekStart.getUTCMonth() + 1,
+      weekStart,
+      weekEnd: monthEnd,
+      weekRangeLabel: formatWeekRangeLabel(weekStart, monthEnd),
+      metrics: splitMetrics.first,
+    },
+    {
+      ...record,
+      year: weekEnd.getUTCFullYear(),
+      month: weekEnd.getUTCMonth() + 1,
+      weekStart: nextMonthStart,
+      weekEnd,
+      weekRangeLabel: formatWeekRangeLabel(nextMonthStart, weekEnd),
+      metrics: splitMetrics.second,
+    },
+  ];
+}
+
+function toPeriodKey(reportType, year, month, weekNumber) {
+  const monthPart = String(month).padStart(2, '0');
+  if (reportType === 'weekly_financial') {
+    return `${year}-${monthPart}-W${String(weekNumber || 0).padStart(2, '0')}`;
+  }
+  return `${year}-${monthPart}`;
+}
+
+function extractWeeklyRows(sheetRows, sheetName, defaultYear) {
+  const entries = [];
+
+  for (let rowIndex = 0; rowIndex < sheetRows.length; rowIndex += 1) {
+    const row = sheetRows[rowIndex] || [];
+    const normalized = row.map(normalizeHeader);
+
+    const weekCol = normalized.findIndex(
+      (header) => header === 'weekending' || header.includes('weekending')
+    );
+    const salesCol = normalized.findIndex((header) => header === 'sales');
+    const netCol = normalized.findIndex((header) => header === 'net');
+
+    if (weekCol < 0 || salesCol < 0 || netCol < 0) continue;
+
+    const storeCol = normalized.findIndex((header) => header === 'store');
+    let localWeekCounter = 1;
+
+    for (let dataIndex = rowIndex + 1; dataIndex < sheetRows.length; dataIndex += 1) {
+      const dataRow = sheetRows[dataIndex] || [];
+      const weekRangeRaw = normalizeText(dataRow[weekCol]);
+      if (!weekRangeRaw) continue;
+      if (!weekRangeRaw.toLowerCase().includes('to')) continue;
+
+      const parsedRange = parseWeekRange(weekRangeRaw, defaultYear);
+      if (!parsedRange) continue;
+
+      const weekNumberRaw = dataRow[0];
+      const parsedWeek = Number(weekNumberRaw);
+      const weekNumber =
+        Number.isFinite(parsedWeek) && parsedWeek > 0 ? parsedWeek : localWeekCounter;
+
+      const labourCol = normalized.findIndex((header) => header === 'labour');
+      const vat18Col = normalized.findIndex((header) => header === 'vat18');
+      const royaltiesCol = normalized.findIndex((header) => header === 'royalties');
+      const foodCost22Col = normalized.findIndex((header) => header === 'foodcost22');
+      const commissionCol = normalized.findIndex(
+        (header) => header === 'commision' || header === 'commission'
+      );
+      const commissionPercentageCol = normalized.findIndex(
+        (header) => header === 'commisionpercentage' || header === 'commissionpercentage'
+      );
+      const totalCol = normalized.findIndex((header) => header === 'total');
+      const incomeCol = normalized.findIndex((header) => header === 'income');
+
+      const sales = sanitizeNumber(dataRow[salesCol]);
+      const net = sanitizeNumber(dataRow[netCol]);
+      const labour = sanitizeNumber(dataRow[labourCol]);
+      const vat18 = sanitizeNumber(dataRow[vat18Col]);
+      const royalties = sanitizeNumber(dataRow[royaltiesCol]);
+      const foodCost22 = sanitizeNumber(dataRow[foodCost22Col]);
+      const commission = sanitizeNumber(dataRow[commissionCol]);
+      const commissionPercentage = sanitizeNumber(dataRow[commissionPercentageCol]);
+      const total = sanitizeNumber(dataRow[totalCol]);
+      const income = sanitizeNumber(dataRow[incomeCol]);
+
+      const baseMetrics = {
+        sales,
+        net,
+        labour,
+        vat18,
+        royalties,
+        foodCost22,
+        commission,
+        commissionPercentage,
+        total,
+        income,
+      };
+
+      const usedColumnIndexes = new Set([
+        0,
+        storeCol,
+        weekCol,
+        salesCol,
+        netCol,
+        labourCol,
+        vat18Col,
+        royaltiesCol,
+        foodCost22Col,
+        commissionCol,
+        commissionPercentageCol,
+        totalCol,
+        incomeCol,
+      ]);
+
+      const extraMetrics = collectAdditionalNumericMetrics(
+        dataRow,
+        row,
+        usedColumnIndexes,
+        Object.keys(baseMetrics)
+      );
+
+      if (
+        !hasAnyValue([
+          sales,
+          net,
+          labour,
+          vat18,
+          royalties,
+          foodCost22,
+          commission,
+          commissionPercentage,
+          total,
+          income,
+        ])
+      ) {
+        continue;
+      }
+
+      entries.push({
+        reportType: 'weekly_financial',
+        storeName: normalizeText(dataRow[storeCol]) || sheetName,
+        year: parsedRange.year,
+        month: parsedRange.month,
+        weekNumber,
+        weekStart: parsedRange.weekStart,
+        weekEnd: parsedRange.weekEnd,
+        weekRangeLabel: parsedRange.weekRangeLabel,
+        metrics: { ...baseMetrics, ...extraMetrics },
+      });
+
+      localWeekCounter += 1;
+    }
+  }
+
+  return entries;
+}
+
+function extractMonthlyRows(sheetRows, defaultYear) {
+  const entries = [];
+
+  for (let rowIndex = 0; rowIndex < sheetRows.length; rowIndex += 1) {
+    const row = sheetRows[rowIndex] || [];
+    const normalized = row.map(normalizeHeader);
+
+    const storeCol = normalized.findIndex((header) => header === 'store');
+    const grossSaleCol = normalized.findIndex((header) => header === 'grosssale');
+    const netSaleCol = normalized.findIndex((header) => header === 'netsale');
+
+    if (storeCol < 0 || grossSaleCol < 0 || netSaleCol < 0) continue;
+
+    let activeMonth = null;
+
+    for (let dataIndex = rowIndex + 1; dataIndex < sheetRows.length; dataIndex += 1) {
+      const dataRow = sheetRows[dataIndex] || [];
+      const cellA = normalizeText(dataRow[0]);
+      const possibleMonth = parseMonthLabel(cellA);
+      if (possibleMonth) {
+        activeMonth = possibleMonth;
+      }
+
+      const storeName = normalizeText(dataRow[storeCol]);
+      if (!storeName || isTotalRow(storeName)) continue;
+
+      if (!activeMonth) {
+        activeMonth = { year: Number(defaultYear), month: 1 };
+      }
+
+      const vatCol = normalized.findIndex((header) => header === 'vat');
+      const vatPercentCol = normalized.findIndex((header) => header === 'vatpercent');
+      const customerCountCol = normalized.findIndex((header) => header === 'customercount');
+      const bidfoodCol = normalized.findIndex((header) => header === 'bidfood');
+      const bidfoodPercentCol = normalized.findIndex((header) => header === 'bidfoodpercent');
+      const labourHourCol = normalized.findIndex((header) => header === 'labourhour');
+      const labourCostCol = normalized.findIndex((header) => header === 'labourcost');
+      const labourPercentCol = normalized.findIndex((header) => header === 'labourpercent');
+      const kioskPercentCol = normalized.findIndex((header) => header === 'kioskpercent');
+      const totalCogsCol = normalized.findIndex((header) => header === 'totalcogs');
+      const revScoreQ1Col = normalized.findIndex((header) => header === 'revscoreq1');
+
+      const grossSale = sanitizeNumber(dataRow[grossSaleCol]);
+      const netSale = sanitizeNumber(dataRow[netSaleCol]);
+      const vat = sanitizeNumber(dataRow[vatCol]);
+      const vatPercent = sanitizeNumber(dataRow[vatPercentCol]);
+      const customerCount = sanitizeNumber(dataRow[customerCountCol]);
+      const bidfood = sanitizeNumber(dataRow[bidfoodCol]);
+      const bidfoodPercent = sanitizeNumber(dataRow[bidfoodPercentCol]);
+      const labourHour = sanitizeNumber(dataRow[labourHourCol]);
+      const labourCost = sanitizeNumber(dataRow[labourCostCol]);
+      const labourPercent = sanitizeNumber(dataRow[labourPercentCol]);
+      const kioskPercent = sanitizeNumber(dataRow[kioskPercentCol]);
+      const totalCogs = sanitizeNumber(dataRow[totalCogsCol]);
+      const revScoreQ1 = sanitizeNumber(dataRow[revScoreQ1Col]);
+
+      const baseMetrics = {
+        grossSale,
+        netSale,
+        vat,
+        vatPercent,
+        customerCount,
+        bidfood,
+        bidfoodPercent,
+        labourHour,
+        labourCost,
+        labourPercent,
+        kioskPercent,
+        totalCogs,
+        revScoreQ1,
+      };
+
+      const usedColumnIndexes = new Set([
+        0,
+        storeCol,
+        grossSaleCol,
+        netSaleCol,
+        vatCol,
+        vatPercentCol,
+        customerCountCol,
+        bidfoodCol,
+        bidfoodPercentCol,
+        labourHourCol,
+        labourCostCol,
+        labourPercentCol,
+        kioskPercentCol,
+        totalCogsCol,
+        revScoreQ1Col,
+      ]);
+
+      const extraMetrics = collectAdditionalNumericMetrics(
+        dataRow,
+        row,
+        usedColumnIndexes,
+        Object.keys(baseMetrics)
+      );
+
+      if (
+        !hasAnyValue([
+          grossSale,
+          netSale,
+          vat,
+          vatPercent,
+          customerCount,
+          bidfood,
+          bidfoodPercent,
+          labourHour,
+          labourCost,
+          labourPercent,
+          kioskPercent,
+          totalCogs,
+          revScoreQ1,
+        ])
+      ) {
+        continue;
+      }
+
+      entries.push({
+        reportType: 'monthly_store_kpi',
+        storeName,
+        year: activeMonth.year,
+        month: activeMonth.month,
+        weekNumber: null,
+        weekStart: null,
+        weekEnd: null,
+        weekRangeLabel: null,
+        metrics: { ...baseMetrics, ...extraMetrics },
+      });
+    }
+  }
+
+  return entries;
+}
+
+async function buildShopLookup() {
+  const shops = await Shop.find({}).select('_id name');
+  const byId = new Map();
+  const byName = new Map();
+
+  shops.forEach((shop) => {
+    byId.set(shop._id.toString(), shop);
+    byName.set(normalizeStoreName(shop.name), shop);
+  });
+
+  return { byId, byName };
+}
+
+function normalizeForPersistence(record) {
+  return splitWeeklyRecordAcrossMonths(record).map((part) => ({
+    ...part,
+    periodKey: toPeriodKey(part.reportType, part.year, part.month, part.weekNumber),
+  }));
+}
+
+function mergeRecords(excelRows, adminRows) {
+  const merged = new Map();
+
+  excelRows.forEach((row) => {
+    const key = `${row.shop_id._id.toString()}::${row.report_type}::${row.period_key}`;
+    merged.set(key, row);
+  });
+
+  adminRows.forEach((row) => {
+    const key = `${row.shop_id._id.toString()}::${row.report_type}::${row.period_key}`;
+    merged.set(key, row);
+  });
+
+  return Array.from(merged.values());
+}
+
+function toTableRow(record) {
+  if (record.report_type === 'weekly_financial') {
+    return {
+      id: record._id,
+      shopId: record.shop_id?._id || record.shop_id,
+      shopName: record.shop_id?.name || record.store_name_raw,
+      year: record.year,
+      month: record.month,
+      weekNumber: record.week_number,
+      weekRange: record.week_range_label,
+      sales: record.metrics.sales ?? 0,
+      net: record.metrics.net ?? 0,
+      labour: record.metrics.labour ?? 0,
+      vat18: record.metrics.vat18 ?? 0,
+      royalties: record.metrics.royalties ?? 0,
+      foodCost22: record.metrics.foodCost22 ?? 0,
+      commission: record.metrics.commission ?? 0,
+      commissionPercentage: record.metrics.commissionPercentage ?? 0,
+      total: record.metrics.total ?? 0,
+      income: record.metrics.income ?? 0,
+      metrics: record.metrics || {},
+      sourceType: record.source_type,
+    };
+  }
+
+  return {
+    id: record._id,
+    shopId: record.shop_id?._id || record.shop_id,
+    shopName: record.shop_id?.name || record.store_name_raw,
+    year: record.year,
+    month: record.month,
+    grossSale: record.metrics.grossSale ?? 0,
+    netSale: record.metrics.netSale ?? 0,
+    vat: record.metrics.vat ?? 0,
+    vatPercent: record.metrics.vatPercent ?? 0,
+    customerCount: record.metrics.customerCount ?? 0,
+    bidfood: record.metrics.bidfood ?? 0,
+    bidfoodPercent: record.metrics.bidfoodPercent ?? 0,
+    labourHour: record.metrics.labourHour ?? 0,
+    labourCost: record.metrics.labourCost ?? 0,
+    labourPercent: record.metrics.labourPercent ?? 0,
+    kioskPercent: record.metrics.kioskPercent ?? 0,
+    totalCogs: record.metrics.totalCogs ?? 0,
+    revScoreQ1: record.metrics.revScoreQ1 ?? 0,
+    metrics: record.metrics || {},
+    sourceType: record.source_type,
+  };
+}
+
+function buildTotals(rows, reportType) {
+  const totals = { shopName: 'Total' };
+  const numericFields =
+    reportType === 'weekly_financial' ? WEEKLY_NUMERIC_FIELDS : MONTHLY_NUMERIC_FIELDS;
+
+  numericFields.forEach((field) => {
+    totals[field] = rows.reduce((sum, row) => sum + (Number(row[field]) || 0), 0);
+  });
+
+  return totals;
+}
+
+function applyShopReadFilter(baseFilter, req, shopScope) {
+  const queryShopId = req.query.shop_id;
+
+  if (queryShopId) {
+    if (!shopScope.all && !isShopAllowed(shopScope, queryShopId)) {
+      return { ...baseFilter, shop_id: { $in: [] } };
+    }
+    return { ...baseFilter, shop_id: queryShopId };
+  }
+
+  if (!shopScope.all) {
+    if (shopScope.ids.length === 0) {
+      return { ...baseFilter, shop_id: { $in: [] } };
+    }
+    return { ...baseFilter, shop_id: { $in: shopScope.ids } };
+  }
+
+  return baseFilter;
+}
+
+async function bulkUpsertRecords(records, sourceType, actorId, sourceFile) {
+  if (records.length === 0) {
+    return { upserted: 0, modified: 0, matched: 0 };
+  }
+
+  const ops = records.map((record) => ({
+    updateOne: {
+      filter: {
+        shop_id: record.shop_id,
+        report_type: record.reportType,
+        source_type: sourceType,
+        period_key: record.periodKey,
+      },
+      update: {
+        $set: {
+          year: record.year,
+          month: record.month,
+          week_number: record.weekNumber || null,
+          week_start: record.weekStart || null,
+          week_end: record.weekEnd || null,
+          week_range_label: record.weekRangeLabel || null,
+          store_name_raw: record.storeName || null,
+          metrics: record.metrics || {},
+          source_file: sourceFile || null,
+          updated_by: actorId || null,
+        },
+        $setOnInsert: {
+          imported_by: actorId || null,
+        },
+      },
+      upsert: true,
+    },
+  }));
+
+  const result = await StoreReportEntry.bulkWrite(ops, { ordered: false });
+  return {
+    upserted: result.upsertedCount || 0,
+    modified: result.modifiedCount || 0,
+    matched: result.matchedCount || 0,
+  };
+}
+
+function toDatasetPayload(records, reportType) {
+  const rows = records.map(toTableRow).sort((a, b) => {
+    const yearDiff = (a.year || 0) - (b.year || 0);
+    if (yearDiff !== 0) return yearDiff;
+    const monthDiff = (a.month || 0) - (b.month || 0);
+    if (monthDiff !== 0) return monthDiff;
+    const weekDiff = (a.weekNumber || 0) - (b.weekNumber || 0);
+    if (weekDiff !== 0) return weekDiff;
+    return String(a.shopName || '').localeCompare(String(b.shopName || ''));
+  });
+
+  return {
+    rows,
+    totals: buildTotals(rows, reportType),
+    count: rows.length,
+  };
+}
+
+const importExcelData = asyncHandler(async (req, res) => {
+  let xlsx;
+  try {
+    // Keep xlsx require lazy so APIs not using import don't crash if package missing.
+     
+    xlsx = require('xlsx');
+  } catch {
+    throw new AppError('xlsx dependency is missing. Run npm install.', 500);
+  }
+
+  const filePathInput = req.body?.file_path || path.join('resourse', 'Book1 (1).xlsx');
+  const filePath = path.isAbsolute(filePathInput)
+    ? filePathInput
+    : path.resolve(process.cwd(), filePathInput);
+
+  if (!fs.existsSync(filePath)) {
+    throw new AppError(`Excel file not found at path: ${filePath}`, 400);
+  }
+
+  const year = Number(req.body?.year) || new Date().getUTCFullYear();
+  const workbook = xlsx.readFile(filePath, { cellDates: false });
+  const shopLookup = await buildShopLookup();
+
+  const rowErrors = [];
+  const records = [];
+
+  workbook.SheetNames.forEach((sheetName) => {
+    const sheet = workbook.Sheets[sheetName];
+    const rows = xlsx.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: '' });
+
+    const weeklyRows = extractWeeklyRows(rows, sheetName, year);
+    const monthlyRows = extractMonthlyRows(rows, year);
+
+    [...weeklyRows, ...monthlyRows].forEach((row, index) => {
+      const normalizedStoreName = normalizeStoreName(row.storeName);
+      const shop = shopLookup.byName.get(normalizedStoreName);
+
+      if (!shop) {
+        rowErrors.push({
+          sheet: sheetName,
+          row: index + 1,
+          storeName: row.storeName,
+          reason: 'Store name does not match any existing shop',
+        });
+        return;
+      }
+
+      normalizeForPersistence({
+        ...row,
+        shop_id: shop._id,
+      }).forEach((segment) => records.push(segment));
+    });
+  });
+
+  const result = await bulkUpsertRecords(records, 'excel_raw', req.user?._id, filePath);
+
+  return sendSuccess(res, 'Excel report data imported successfully', {
+    imported: result.upserted + result.modified,
+    upserted: result.upserted,
+    updated: result.modified,
+    matched: result.matched,
+    failed: rowErrors.length,
+    errors: rowErrors,
+  });
+});
+
+const upsertAdminWeeklyData = asyncHandler(async (req, res) => {
+  const entries = Array.isArray(req.body?.entries) ? req.body.entries : [];
+  if (entries.length === 0) {
+    throw new AppError('entries[] is required', 400);
+  }
+
+  const shopLookup = await buildShopLookup();
+  const rowErrors = [];
+  const records = [];
+
+  entries.forEach((entry, idx) => {
+    const reportType = entry.report_type || 'weekly_financial';
+    if (!['weekly_financial', 'monthly_store_kpi'].includes(reportType)) {
+      rowErrors.push({ row: idx + 1, reason: 'Invalid report_type' });
+      return;
+    }
+
+    let shop = null;
+    if (entry.shop_id) {
+      shop = shopLookup.byId.get(String(entry.shop_id));
+    } else if (entry.store_name) {
+      shop = shopLookup.byName.get(normalizeStoreName(entry.store_name));
+    }
+
+    if (!shop) {
+      rowErrors.push({
+        row: idx + 1,
+        reason: 'shop_id/store_name does not map to an existing shop',
+      });
+      return;
+    }
+
+    const year = Number(entry.year);
+    const month = Number(entry.month);
+
+    if (!year || !month || month < 1 || month > 12) {
+      rowErrors.push({ row: idx + 1, reason: 'year and month are required' });
+      return;
+    }
+
+    let weekNumber = null;
+    let weekStart = null;
+    let weekEnd = null;
+    let weekRangeLabel = null;
+
+    if (reportType === 'weekly_financial') {
+      weekNumber = Number(entry.week_number);
+      if (!weekNumber || weekNumber < 1 || weekNumber > 53) {
+        rowErrors.push({ row: idx + 1, reason: 'week_number is required for weekly_financial' });
+        return;
+      }
+
+      weekRangeLabel = normalizeText(entry.week_range_label);
+      if (weekRangeLabel) {
+        const parsed = parseWeekRange(weekRangeLabel, year);
+        if (parsed) {
+          weekStart = parsed.weekStart;
+          weekEnd = parsed.weekEnd;
+          weekRangeLabel = parsed.weekRangeLabel;
+        }
+      }
+
+      if (!weekStart && entry.week_start) {
+        weekStart = new Date(entry.week_start);
+      }
+      if (!weekEnd && entry.week_end) {
+        weekEnd = new Date(entry.week_end);
+      }
+    }
+
+    if (!entry.metrics || typeof entry.metrics !== 'object') {
+      rowErrors.push({ row: idx + 1, reason: 'metrics object is required' });
+      return;
+    }
+
+    normalizeForPersistence({
+      reportType,
+      shop_id: shop._id,
+      storeName: shop.name,
+      year,
+      month,
+      weekNumber,
+      weekStart,
+      weekEnd,
+      weekRangeLabel,
+      metrics: entry.metrics,
+    }).forEach((segment) => records.push(segment));
+  });
+
+  const result = await bulkUpsertRecords(records, 'admin_weekly', req.user?._id, null);
+
+  return sendSuccess(res, 'Admin weekly data upserted successfully', {
+    imported: result.upserted + result.modified,
+    upserted: result.upserted,
+    updated: result.modified,
+    matched: result.matched,
+    failed: rowErrors.length,
+    errors: rowErrors,
+  });
+});
+
+const getStoreReportTable = asyncHandler(async (req, res) => {
+  const view = req.query.view || 'reconciled';
+  const reportType = req.query.report_type || 'weekly_financial';
+
+  if (!['excel_raw', 'admin_weekly', 'reconciled', 'all'].includes(view)) {
+    throw new AppError('view must be one of excel_raw, admin_weekly, reconciled, all', 400);
+  }
+
+  if (!['weekly_financial', 'monthly_store_kpi'].includes(reportType)) {
+    throw new AppError('report_type must be weekly_financial or monthly_store_kpi', 400);
+  }
+
+  const filter = { report_type: reportType };
+
+  if (req.query.year) filter.year = Number(req.query.year);
+  if (req.query.month) filter.month = Number(req.query.month);
+  if (req.query.week_number) filter.week_number = Number(req.query.week_number);
+
+  const shopScope = buildShopScope(req.user);
+  const scopedFilter = applyShopReadFilter(filter, req, shopScope);
+
+  const [excelRows, adminRows] = await Promise.all([
+    StoreReportEntry.find({ ...scopedFilter, source_type: 'excel_raw' }).populate(
+      'shop_id',
+      'name'
+    ),
+    StoreReportEntry.find({ ...scopedFilter, source_type: 'admin_weekly' }).populate(
+      'shop_id',
+      'name'
+    ),
+  ]);
+
+  const reconciledRows = mergeRecords(excelRows, adminRows);
+
+  const datasets = {
+    excel_raw: toDatasetPayload(excelRows, reportType),
+    admin_weekly: toDatasetPayload(adminRows, reportType),
+    reconciled: toDatasetPayload(reconciledRows, reportType),
+  };
+
+  if (view === 'all') {
+    return sendSuccess(res, 'Store report tables fetched successfully', {
+      view,
+      report_type: reportType,
+      columns: REPORT_COLUMNS[reportType],
+      tables: datasets,
+      source_counts: {
+        excel_raw: excelRows.length,
+        admin_weekly: adminRows.length,
+      },
+    });
+  }
+
+  return sendSuccess(res, 'Store report table fetched successfully', {
+    view,
+    report_type: reportType,
+    columns: REPORT_COLUMNS[reportType],
+    ...datasets[view],
+    source_counts: {
+      excel_raw: excelRows.length,
+      admin_weekly: adminRows.length,
+    },
+  });
+});
+
+module.exports = {
+  importExcelData,
+  upsertAdminWeeklyData,
+  getStoreReportTable,
+};

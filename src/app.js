@@ -16,6 +16,7 @@ const inventoryItemRoutes = require('./routes/inventoryItems');
 const inventoryQueryRoutes = require('./routes/inventoryQueries');
 const inventoryAuditRoutes = require('./routes/inventoryAudit');
 const observabilityRoutes = require('./routes/observability');
+const storeReportRoutes = require('./routes/storeReports');
 const { sendSuccess } = require('./utils/response');
 const { notFoundHandler, globalErrorHandler } = require('./middleware/errorHandler');
 const { requestAnalytics } = require('./middleware/requestAnalyticsMiddleware');
@@ -30,15 +31,21 @@ app.use(express.json());
 app.use(requestAnalytics);
 
 // Health check
-app.get('/health', (req, res) => sendSuccess(res, 'Service is healthy', {
-  timestamp: new Date().toISOString(),
-}));
+app.get('/health', (req, res) =>
+  sendSuccess(res, 'Service is healthy', {
+    timestamp: new Date().toISOString(),
+  })
+);
 
 // Swagger UI — http://localhost:5000/api-docs
-app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
-  customSiteTitle: 'Staff & Inventory API Docs',
-  swaggerOptions: { persistAuthorization: true },
-}));
+app.use(
+  '/api-docs',
+  swaggerUi.serve,
+  swaggerUi.setup(swaggerSpec, {
+    customSiteTitle: 'Staff & Inventory API Docs',
+    swaggerOptions: { persistAuthorization: true },
+  })
+);
 // Raw OpenAPI JSON — useful for Postman import
 app.get('/api-docs.json', (req, res) => sendSuccess(res, 'OpenAPI spec fetched', swaggerSpec));
 
@@ -53,10 +60,10 @@ app.use('/api/inventory/items', inventoryItemRoutes);
 app.use('/api/inventory/queries', inventoryQueryRoutes);
 app.use('/api/inventory/audit-logs', inventoryAuditRoutes);
 app.use('/api/observability', observabilityRoutes);
+app.use('/api/store-reports', storeReportRoutes);
 
 // 404 + global error handlers
 app.use(notFoundHandler);
 app.use(globalErrorHandler);
-
 
 module.exports = app;
