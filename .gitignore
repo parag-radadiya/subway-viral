@@ -23,3 +23,5 @@ coverage/
 # Local resource files
 resourse/
 
+temp_auto_push.bat
+temp_interactive_push.bat

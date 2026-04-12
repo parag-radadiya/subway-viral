@@ -37,6 +37,26 @@ const MONTHLY_NUMERIC_FIELDS = [
   'revScoreQ1',
 ];
 
+const CHANNEL_KEYS = ['justeat', 'ubereat', 'deliveroo', 'thirdParty', 'instore'];
+
+const CHANNEL_ALIASES = {
+  justeat: 'justeat',
+  justeatSale: 'justeat',
+  ubereat: 'ubereat',
+  uberEat: 'ubereat',
+  ubereatSale: 'ubereat',
+  deliveroo: 'deliveroo',
+  deliverooSale: 'deliveroo',
+  thirdparty: 'thirdParty',
+  thirdParty: 'thirdParty',
+  third_party: 'thirdParty',
+  threedpd: 'thirdParty',
+  '3pd': 'thirdParty',
+  instore: 'instore',
+  inStore: 'instore',
+  offline: 'instore',
+};
+
 const REPORT_COLUMNS = {
   weekly_financial: [
     { key: 'shopName', label: 'Store' },
@@ -1128,6 +1148,47 @@ function summarizeKpis(records) {
   };
 }
 
+function parseChannelSelection(query) {
+  const raw = normalizeText(query.channels);
+  if (!raw) return [...CHANNEL_KEYS];
+
+  const selected = [];
+  raw
+    .split(',')
+    .map((value) => normalizeText(value))
+    .filter(Boolean)
+    .forEach((token) => {
+      const canonical = CHANNEL_ALIASES[token] || CHANNEL_ALIASES[normalizeMetricAlias(token)];
+      if (!canonical || !CHANNEL_KEYS.includes(canonical)) {
+        throw new AppError(
+          'channels must contain only justeat, ubereat, deliveroo, thirdParty, instore/offline',
+          400
+        );
+      }
+      if (!selected.includes(canonical)) selected.push(canonical);
+    });
+
+  return selected.length > 0 ? selected : [...CHANNEL_KEYS];
+}
+
+function pickChannels(kpis, channels) {
+  const source = kpis?.channels || {};
+  return channels.reduce((acc, key) => {
+    acc[key] = round2(Number(source[key]) || 0);
+    return acc;
+  }, {});
+}
+
+function buildChannelComparisonPayload(currentRows, previousRows, channels) {
+  const currentChannels = pickChannels(summarizeKpis(currentRows), channels);
+  const previousChannels = pickChannels(summarizeKpis(previousRows), channels);
+
+  return channels.reduce((acc, channel) => {
+    acc[channel] = computeDelta(currentChannels[channel], previousChannels[channel]);
+    return acc;
+  }, {});
+}
+
 function computeDelta(current, previous) {
   const change = round2(current - previous);
   const changePct = previous === 0 ? null : round2((change / previous) * 100);
@@ -1141,6 +1202,59 @@ function parseDate(value, fieldName) {
     throw new AppError(`${fieldName} must be a valid date`, 400);
   }
   return date;
+}
+
+function parseExplicitComparisonWindow(query, prefix) {
+  const fromKey = `${prefix}_from`;
+  const toKey = `${prefix}_to`;
+  const fromRaw = query[fromKey];
+  const toRaw = query[toKey];
+
+  if ((fromRaw && !toRaw) || (!fromRaw && toRaw)) {
+    throw new AppError(`${fromKey} and ${toKey} must be provided together`, 400);
+  }
+
+  if (!fromRaw && !toRaw) {
+    return null;
+  }
+
+  const from = toUtcDayStart(parseDate(fromRaw, fromKey));
+  const to = toUtcDayEnd(parseDate(toRaw, toKey));
+  if (from > to) {
+    throw new AppError(`${fromKey} must be before ${toKey}`, 400);
+  }
+
+  return { from, to };
+}
+
+function toWindowMeta(window, mode) {
+  if (!window) return null;
+  return {
+    from: window.from,
+    to: window.to,
+    mode,
+  };
+}
+
+function resolveComparisonWindows(query, currentWindow, compare) {
+  const explicitWowWindow = parseExplicitComparisonWindow(query, 'wow');
+  const explicitYoyWindow = parseExplicitComparisonWindow(query, 'yoy');
+
+  const wowWindow =
+    compare === 'yoy' ? null : explicitWowWindow || shiftWindow(currentWindow, 'wow');
+
+  const yoyWindow =
+    compare === 'wow' ? null : explicitYoyWindow || shiftWindow(currentWindow, 'yoy');
+
+  return {
+    wowWindow,
+    yoyWindow,
+    comparisonWindows: {
+      current: toWindowMeta(currentWindow, 'current'),
+      wow: toWindowMeta(wowWindow, explicitWowWindow ? 'custom' : 'derived'),
+      yoy: toWindowMeta(yoyWindow, explicitYoyWindow ? 'custom' : 'derived'),
+    },
+  };
 }
 
 function deriveDateWindow(req, rows) {
@@ -1283,6 +1397,141 @@ function buildComparisonPayload(currentRows, previousRows) {
   };
 }
 
+function parseAnalyticsMetric(query) {
+  const metric = String(query.metric || 'revenue').toLowerCase();
+  if (!['revenue', 'profit', 'orders', 'averageOrderValue'].includes(metric)) {
+    throw new AppError('metric must be one of revenue, profit, orders, averageOrderValue', 400);
+  }
+  return metric;
+}
+
+function parseTrendGranularity(query) {
+  const granularity = String(query.granularity || 'week').toLowerCase();
+  if (!['week', 'month'].includes(granularity)) {
+    throw new AppError('granularity must be one of week, month', 400);
+  }
+  return granularity;
+}
+
+function parseSortDirection(query) {
+  const sort = String(query.sort || 'desc').toLowerCase();
+  if (!['asc', 'desc'].includes(sort)) {
+    throw new AppError('sort must be one of asc, desc', 400);
+  }
+  return sort;
+}
+
+function parsePositiveInt(queryValue, fallback, fieldName, maxValue = 200) {
+  const raw = Number(queryValue ?? fallback);
+  if (!Number.isInteger(raw) || raw < 1) {
+    throw new AppError(`${fieldName} must be a positive integer`, 400);
+  }
+  return Math.min(raw, maxValue);
+}
+
+function toMetricValue(summary, metric) {
+  if (metric === 'revenue') return round2(summary.revenue || 0);
+  if (metric === 'profit') return round2(summary.profit || 0);
+  if (metric === 'orders') return round2(summary.orders || 0);
+  return round2(summary.averageOrderValue || 0);
+}
+
+function buildSeriesFromRows(rows, metric, granularity) {
+  const grouped = new Map();
+
+  rows.forEach((row) => {
+    const key =
+      granularity === 'month'
+        ? `${row.year}-${String(row.month || 0).padStart(2, '0')}`
+        : row.period_key ||
+          `${row.year}-${String(row.month || 0).padStart(2, '0')}-W${String(
+            row.week_number || 0
+          ).padStart(2, '0')}`;
+
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        periodKey: key,
+        year: row.year,
+        month: row.month,
+        weekNumber: granularity === 'week' ? row.week_number : null,
+        label:
+          granularity === 'month'
+            ? `${String(row.month || 0).padStart(2, '0')}/${row.year}`
+            : row.week_range_label ||
+              `W${String(row.week_number || 0).padStart(2, '0')} ${String(row.month || 0).padStart(
+                2,
+                '0'
+              )}/${row.year}`,
+        rows: [],
+      });
+    }
+
+    grouped.get(key).rows.push(row);
+  });
+
+  return Array.from(grouped.values())
+    .map((bucket) => {
+      const summary = summarizeKpis(bucket.rows);
+      return {
+        periodKey: bucket.periodKey,
+        year: bucket.year,
+        month: bucket.month,
+        weekNumber: bucket.weekNumber,
+        label: bucket.label,
+        value: toMetricValue(summary, metric),
+      };
+    })
+    .sort((a, b) => {
+      const yearDiff = (a.year || 0) - (b.year || 0);
+      if (yearDiff !== 0) return yearDiff;
+      const monthDiff = (a.month || 0) - (b.month || 0);
+      if (monthDiff !== 0) return monthDiff;
+      return (a.weekNumber || 0) - (b.weekNumber || 0);
+    });
+}
+
+async function getAnalyticsContext(req) {
+  const reportType = req.query.report_type || 'weekly_financial';
+  const view = req.query.view || 'reconciled';
+
+  if (!['weekly_financial', 'monthly_store_kpi'].includes(reportType)) {
+    throw new AppError('report_type must be weekly_financial or monthly_store_kpi', 400);
+  }
+
+  if (!['excel_raw', 'admin_weekly', 'reconciled'].includes(view)) {
+    throw new AppError('view must be one of excel_raw, admin_weekly, reconciled', 400);
+  }
+
+  const filter = { report_type: reportType };
+  if (req.query.year) filter.year = Number(req.query.year);
+  if (req.query.month) filter.month = Number(req.query.month);
+  if (req.query.week_number) filter.week_number = Number(req.query.week_number);
+
+  const shopScope = buildShopScope(req.user);
+  const scopedFilter = applyShopReadFilter(filter, req, shopScope);
+
+  const { excelRows, adminRows } = await loadRowsByView(scopedFilter, view);
+  const currentRows =
+    view === 'reconciled' ? mergeRecords(excelRows, adminRows) : [...excelRows, ...adminRows];
+
+  const window = deriveDateWindow(req, currentRows);
+  const rowsInWindow = window
+    ? currentRows.filter((row) => isWithinWindow(row, window))
+    : currentRows;
+
+  return {
+    reportType,
+    view,
+    window,
+    currentRows,
+    rowsInWindow,
+    sourceCounts: {
+      excel_raw: excelRows.length,
+      admin_weekly: adminRows.length,
+    },
+  };
+}
+
 async function loadRowsByView(filter, view) {
   if (view === 'excel_raw' || view === 'admin_weekly') {
     const rows = await StoreReportEntry.find({ ...filter, source_type: view }).populate(
@@ -1302,6 +1551,192 @@ async function loadRowsByView(filter, view) {
 
   return { excelRows, adminRows };
 }
+
+const getStoreReportAnalyticsSummary = asyncHandler(async (req, res) => {
+  const compare = req.query.compare || 'both';
+  const channels = parseChannelSelection(req.query);
+  if (!['wow', 'yoy', 'both'].includes(compare)) {
+    throw new AppError('compare must be one of wow, yoy, both', 400);
+  }
+
+  const context = await getAnalyticsContext(req);
+  const { wowWindow, yoyWindow, comparisonWindows } = resolveComparisonWindows(
+    req.query,
+    context.window,
+    compare
+  );
+
+  const wowRows = wowWindow
+    ? context.currentRows.filter((row) => isWithinWindow(row, wowWindow))
+    : [];
+  const yoyRows = yoyWindow
+    ? context.currentRows.filter((row) => isWithinWindow(row, yoyWindow))
+    : [];
+
+  return sendSuccess(res, 'Store report analytics summary fetched successfully', {
+    report_type: context.reportType,
+    view: context.view,
+    compare,
+    filters: {
+      channels,
+    },
+    window: context.window,
+    comparison_windows: comparisonWindows,
+    kpis: summarizeKpis(context.rowsInWindow),
+    comparisons: {
+      wow: wowWindow
+        ? {
+            ...buildComparisonPayload(context.rowsInWindow, wowRows),
+            channels: buildChannelComparisonPayload(context.rowsInWindow, wowRows, channels),
+          }
+        : null,
+      yoy: yoyWindow
+        ? {
+            ...buildComparisonPayload(context.rowsInWindow, yoyRows),
+            channels: buildChannelComparisonPayload(context.rowsInWindow, yoyRows, channels),
+          }
+        : null,
+    },
+    charts: {
+      channelTotals: {
+        current: pickChannels(summarizeKpis(context.rowsInWindow), channels),
+        wow: pickChannels(summarizeKpis(wowRows), channels),
+        yoy: pickChannels(summarizeKpis(yoyRows), channels),
+      },
+    },
+    source_counts: context.sourceCounts,
+  });
+});
+
+const getStoreReportAnalyticsStoreRanking = asyncHandler(async (req, res) => {
+  const metric = parseAnalyticsMetric(req.query);
+  const sort = parseSortDirection(req.query);
+  const limit = parsePositiveInt(req.query.limit, 20, 'limit', 100);
+  const context = await getAnalyticsContext(req);
+
+  const grouped = new Map();
+  context.rowsInWindow.forEach((row) => {
+    const shopId = String(row.shop_id?._id || row.shop_id);
+    if (!grouped.has(shopId)) {
+      grouped.set(shopId, {
+        shopId,
+        shopName: row.shop_id?.name || row.store_name_raw || shopId,
+        rows: [],
+      });
+    }
+    grouped.get(shopId).rows.push(row);
+  });
+
+  const rankings = Array.from(grouped.values()).map((entry) => {
+    const summary = summarizeKpis(entry.rows);
+    return {
+      shopId: entry.shopId,
+      shopName: entry.shopName,
+      revenue: summary.revenue,
+      profit: summary.profit,
+      orders: summary.orders,
+      averageOrderValue: summary.averageOrderValue,
+      value: toMetricValue(summary, metric),
+    };
+  });
+
+  rankings.sort((a, b) => (sort === 'asc' ? a.value - b.value : b.value - a.value));
+
+  return sendSuccess(res, 'Store report analytics ranking fetched successfully', {
+    report_type: context.reportType,
+    view: context.view,
+    metric,
+    sort,
+    count: rankings.length,
+    rows: rankings.slice(0, limit),
+    source_counts: context.sourceCounts,
+  });
+});
+
+const getStoreReportAnalyticsTrends = asyncHandler(async (req, res) => {
+  const metric = parseAnalyticsMetric(req.query);
+  const granularity = parseTrendGranularity(req.query);
+  const topN = parsePositiveInt(req.query.top_n, 5, 'top_n', 20);
+  const selectedShopId = req.query.selected_shop_id ? String(req.query.selected_shop_id) : null;
+  const context = await getAnalyticsContext(req);
+
+  const totalSeries = buildSeriesFromRows(context.rowsInWindow, metric, granularity);
+  const byStore = buildStoreBreakdown(context.rowsInWindow);
+  const topShopIds = new Set(byStore.slice(0, topN).map((shop) => String(shop.shopId)));
+  if (selectedShopId) topShopIds.add(selectedShopId);
+
+  const byShop = Array.from(topShopIds)
+    .map((shopId) => {
+      const shopRows = context.rowsInWindow.filter(
+        (row) => String(row.shop_id?._id || row.shop_id) === shopId
+      );
+      if (shopRows.length === 0) return null;
+
+      return {
+        shopId,
+        shopName: shopRows[0].shop_id?.name || shopRows[0].store_name_raw || shopId,
+        total: toMetricValue(summarizeKpis(shopRows), metric),
+        series: buildSeriesFromRows(shopRows, metric, granularity),
+      };
+    })
+    .filter(Boolean);
+
+  return sendSuccess(res, 'Store report analytics trends fetched successfully', {
+    report_type: context.reportType,
+    view: context.view,
+    metric,
+    granularity,
+    selected_shop_id: selectedShopId,
+    total: {
+      value: toMetricValue(summarizeKpis(context.rowsInWindow), metric),
+      series: totalSeries,
+    },
+    shops: byShop,
+    source_counts: context.sourceCounts,
+  });
+});
+
+const getStoreReportAnalyticsSalesChart = asyncHandler(async (req, res) => {
+  const granularity = parseTrendGranularity(req.query);
+  const topN = parsePositiveInt(req.query.top_n, 8, 'top_n', 30);
+  const selectedShopId = req.query.selected_shop_id ? String(req.query.selected_shop_id) : null;
+  const context = await getAnalyticsContext(req);
+
+  const metric = 'revenue';
+  const totalSeries = buildSeriesFromRows(context.rowsInWindow, metric, granularity);
+  const byStore = buildStoreBreakdown(context.rowsInWindow);
+  const topShopIds = new Set(byStore.slice(0, topN).map((shop) => String(shop.shopId)));
+  if (selectedShopId) topShopIds.add(selectedShopId);
+
+  const shops = Array.from(topShopIds)
+    .map((shopId) => {
+      const shopRows = context.rowsInWindow.filter(
+        (row) => String(row.shop_id?._id || row.shop_id) === shopId
+      );
+      if (shopRows.length === 0) return null;
+
+      return {
+        shopId,
+        shopName: shopRows[0].shop_id?.name || shopRows[0].store_name_raw || shopId,
+        totalSales: round2(summarizeKpis(shopRows).revenue),
+        series: buildSeriesFromRows(shopRows, metric, granularity),
+      };
+    })
+    .filter(Boolean);
+
+  return sendSuccess(res, 'Store report sales chart fetched successfully', {
+    report_type: context.reportType,
+    view: context.view,
+    granularity,
+    selected_shop_id: selectedShopId,
+    total: {
+      totalSales: round2(summarizeKpis(context.rowsInWindow).revenue),
+      series: totalSeries,
+    },
+    shops,
+    source_counts: context.sourceCounts,
+  });
+});
 
 const importExcelData = asyncHandler(async (req, res) => {
   let xlsx;
@@ -1578,6 +2013,7 @@ const getStoreReportDashboardAnalytics = asyncHandler(async (req, res) => {
   const reportType = req.query.report_type || 'weekly_financial';
   const view = req.query.view || 'reconciled';
   const compare = req.query.compare || 'both';
+  const channels = parseChannelSelection(req.query);
 
   if (!['weekly_financial', 'monthly_store_kpi'].includes(reportType)) {
     throw new AppError('report_type must be weekly_financial or monthly_store_kpi', 400);
@@ -1608,8 +2044,11 @@ const getStoreReportDashboardAnalytics = asyncHandler(async (req, res) => {
     ? currentRows.filter((row) => isWithinWindow(row, currentWindow))
     : currentRows;
 
-  const wowWindow = compare === 'yoy' ? null : shiftWindow(currentWindow, 'wow');
-  const yoyWindow = compare === 'wow' ? null : shiftWindow(currentWindow, 'yoy');
+  const { wowWindow, yoyWindow, comparisonWindows } = resolveComparisonWindows(
+    req.query,
+    currentWindow,
+    compare
+  );
 
   const wowRows = wowWindow ? currentRows.filter((row) => isWithinWindow(row, wowWindow)) : [];
   const yoyRows = yoyWindow ? currentRows.filter((row) => isWithinWindow(row, yoyWindow)) : [];
@@ -1624,7 +2063,12 @@ const getStoreReportDashboardAnalytics = asyncHandler(async (req, res) => {
       week_number: req.query.week_number ? Number(req.query.week_number) : null,
       from: req.query.from || null,
       to: req.query.to || null,
+      wow_from: req.query.wow_from || null,
+      wow_to: req.query.wow_to || null,
+      yoy_from: req.query.yoy_from || null,
+      yoy_to: req.query.yoy_to || null,
       shop_id: req.query.shop_id || null,
+      channels,
     },
     window: currentWindow
       ? {
@@ -1632,10 +2076,21 @@ const getStoreReportDashboardAnalytics = asyncHandler(async (req, res) => {
           to: currentWindow.to,
         }
       : null,
+    comparison_windows: comparisonWindows,
     kpis: summarizeKpis(rowsInWindow),
     comparisons: {
-      wow: wowWindow ? buildComparisonPayload(rowsInWindow, wowRows) : null,
-      yoy: yoyWindow ? buildComparisonPayload(rowsInWindow, yoyRows) : null,
+      wow: wowWindow
+        ? {
+            ...buildComparisonPayload(rowsInWindow, wowRows),
+            channels: buildChannelComparisonPayload(rowsInWindow, wowRows, channels),
+          }
+        : null,
+      yoy: yoyWindow
+        ? {
+            ...buildComparisonPayload(rowsInWindow, yoyRows),
+            channels: buildChannelComparisonPayload(rowsInWindow, yoyRows, channels),
+          }
+        : null,
     },
     charts: {
       growth: {
@@ -1645,6 +2100,11 @@ const getStoreReportDashboardAnalytics = asyncHandler(async (req, res) => {
       },
       revenueByStore: buildStoreBreakdown(rowsInWindow),
       revenueByChannel: summarizeKpis(rowsInWindow).channels,
+      channelTotals: {
+        current: pickChannels(summarizeKpis(rowsInWindow), channels),
+        wow: pickChannels(summarizeKpis(wowRows), channels),
+        yoy: pickChannels(summarizeKpis(yoyRows), channels),
+      },
     },
     capabilities: {
       hasDailyBreakdown: false,
@@ -1664,5 +2124,9 @@ module.exports = {
   importExcelData,
   upsertAdminWeeklyData,
   getStoreReportTable,
+  getStoreReportAnalyticsSummary,
+  getStoreReportAnalyticsStoreRanking,
+  getStoreReportAnalyticsTrends,
+  getStoreReportAnalyticsSalesChart,
   getStoreReportDashboardAnalytics,
 };

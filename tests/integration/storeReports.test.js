@@ -763,6 +763,321 @@ describe('Store reports integration', () => {
     expect(tableRes.body.data.weekly_totals[0].shopCount).toBe(2);
   });
 
+  it('REPORT-014: summary analytics returns KPI totals with comparison blocks', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+
+    await request(app)
+      .post('/api/store-reports/admin-weekly')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .send({
+        entries: [
+          {
+            report_type: 'weekly_financial',
+            store_name: fixtures.shops.mainShop.name,
+            year: 2026,
+            month: 4,
+            week_number: 14,
+            week_range_label: '29/03 to 04/04',
+            metrics: { sales: 1000, income: 200, customerCount: 50 },
+          },
+          {
+            report_type: 'weekly_financial',
+            store_name: fixtures.shops.mainShop.name,
+            year: 2026,
+            month: 4,
+            week_number: 15,
+            week_range_label: '05/04 to 11/04',
+            metrics: { sales: 1400, income: 280, customerCount: 70 },
+          },
+        ],
+      });
+
+    const summaryRes = await request(app)
+      .get('/api/store-reports/analytics/summary')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({
+        view: 'reconciled',
+        report_type: 'weekly_financial',
+        from: '2026-04-05',
+        to: '2026-04-11',
+        compare: 'both',
+      });
+
+    expectEnvelope(summaryRes, 200);
+    expect(summaryRes.body.data.kpis.revenue).toBe(1400);
+    expect(summaryRes.body.data.kpis.profit).toBe(280);
+    expect(summaryRes.body.data.kpis.orders).toBe(70);
+    expect(summaryRes.body.data.comparisons.wow.revenue.previous).toBe(1000);
+  });
+
+  it('REPORT-017: summary analytics supports custom wow comparison window', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+
+    await request(app)
+      .post('/api/store-reports/admin-weekly')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .send({
+        entries: [
+          {
+            report_type: 'weekly_financial',
+            store_name: fixtures.shops.mainShop.name,
+            year: 2026,
+            month: 4,
+            week_number: 15,
+            week_range_label: '05/04 to 11/04',
+            metrics: { sales: 1400, income: 280, customerCount: 70 },
+          },
+          {
+            report_type: 'weekly_financial',
+            store_name: fixtures.shops.mainShop.name,
+            year: 2026,
+            month: 3,
+            week_number: 10,
+            week_range_label: '02/03 to 08/03',
+            metrics: { sales: 500, income: 100, customerCount: 25 },
+          },
+          {
+            report_type: 'weekly_financial',
+            store_name: fixtures.shops.mainShop.name,
+            year: 2026,
+            month: 4,
+            week_number: 14,
+            week_range_label: '29/03 to 04/04',
+            metrics: { sales: 999, income: 199, customerCount: 50 },
+          },
+        ],
+      });
+
+    const summaryRes = await request(app)
+      .get('/api/store-reports/analytics/summary')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({
+        view: 'reconciled',
+        report_type: 'weekly_financial',
+        from: '2026-04-05',
+        to: '2026-04-11',
+        compare: 'wow',
+        wow_from: '2026-03-02',
+        wow_to: '2026-03-08',
+      });
+
+    expectEnvelope(summaryRes, 200);
+    expect(summaryRes.body.data.kpis.revenue).toBe(1400);
+    expect(summaryRes.body.data.comparisons.wow.revenue.previous).toBe(500);
+    expect(summaryRes.body.data.comparison_windows.wow.mode).toBe('custom');
+    expect(summaryRes.body.data.comparison_windows.wow.from).toBe('2026-03-02T00:00:00.000Z');
+    expect(summaryRes.body.data.comparison_windows.wow.to).toBe('2026-03-08T23:59:59.999Z');
+  });
+
+  it('REPORT-018: summary analytics validates partial custom comparison window params', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+
+    const summaryRes = await request(app)
+      .get('/api/store-reports/analytics/summary')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({
+        report_type: 'weekly_financial',
+        compare: 'wow',
+        wow_from: '2026-03-02',
+      });
+
+    expectEnvelope(summaryRes, 400);
+  });
+
+  it('REPORT-019: dashboard analytics compares selected channel metrics for wow window', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+
+    await request(app)
+      .post('/api/store-reports/admin-weekly')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .send({
+        entries: [
+          {
+            report_type: 'weekly_financial',
+            store_name: fixtures.shops.mainShop.name,
+            year: 2026,
+            month: 4,
+            week_number: 15,
+            week_range_label: '05/04 to 11/04',
+            metrics: {
+              sales: 2000,
+              income: 400,
+              customerCount: 100,
+              justeatSale: 300,
+              ubereatSale: 150,
+              deliverooSale: 150,
+            },
+          },
+          {
+            report_type: 'weekly_financial',
+            store_name: fixtures.shops.mainShop.name,
+            year: 2026,
+            month: 4,
+            week_number: 14,
+            week_range_label: '29/03 to 04/04',
+            metrics: {
+              sales: 1600,
+              income: 320,
+              customerCount: 80,
+              justeatSale: 200,
+              ubereatSale: 100,
+              deliverooSale: 100,
+            },
+          },
+        ],
+      });
+
+    const dashboardRes = await request(app)
+      .get('/api/store-reports/analytics/dashboard')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({
+        view: 'reconciled',
+        report_type: 'weekly_financial',
+        from: '2026-04-05',
+        to: '2026-04-11',
+        compare: 'wow',
+        channels: 'justeat,ubereat,deliveroo,offline',
+      });
+
+    expectEnvelope(dashboardRes, 200);
+    expect(dashboardRes.body.data.filters.channels).toEqual([
+      'justeat',
+      'ubereat',
+      'deliveroo',
+      'instore',
+    ]);
+    expect(dashboardRes.body.data.comparisons.wow.channels.justeat.previous).toBe(200);
+    expect(dashboardRes.body.data.comparisons.wow.channels.justeat.current).toBe(300);
+    expect(dashboardRes.body.data.comparisons.wow.channels.instore.current).toBe(1400);
+    expect(dashboardRes.body.data.comparisons.wow.channels.instore.previous).toBe(1200);
+    expect(dashboardRes.body.data.charts.channelTotals.current.instore).toBe(1400);
+  });
+
+  it('REPORT-020: dashboard analytics validates invalid channels query', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+
+    const dashboardRes = await request(app)
+      .get('/api/store-reports/analytics/dashboard')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({
+        report_type: 'weekly_financial',
+        compare: 'wow',
+        channels: 'justeat,random_channel',
+      });
+
+    expectEnvelope(dashboardRes, 400);
+  });
+
+  it('REPORT-015: store ranking returns sorted stores by selected metric', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+
+    await request(app)
+      .post('/api/store-reports/admin-weekly')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .send({
+        entries: [
+          {
+            report_type: 'weekly_financial',
+            store_name: fixtures.shops.mainShop.name,
+            year: 2026,
+            month: 4,
+            week_number: 19,
+            week_range_label: '12/05 to 18/05',
+            metrics: { sales: 2200, income: 420, customerCount: 110 },
+          },
+          {
+            report_type: 'weekly_financial',
+            store_name: fixtures.shops.eastShop.name,
+            year: 2026,
+            month: 4,
+            week_number: 19,
+            week_range_label: '12/05 to 18/05',
+            metrics: { sales: 900, income: 180, customerCount: 45 },
+          },
+        ],
+      });
+
+    const rankingRes = await request(app)
+      .get('/api/store-reports/analytics/store-ranking')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({
+        view: 'admin_weekly',
+        report_type: 'weekly_financial',
+        metric: 'revenue',
+        sort: 'desc',
+        limit: 5,
+      });
+
+    expectEnvelope(rankingRes, 200);
+    expect(rankingRes.body.data.rows.length).toBeGreaterThanOrEqual(2);
+    expect(rankingRes.body.data.rows[0].revenue).toBeGreaterThanOrEqual(
+      rankingRes.body.data.rows[1].revenue
+    );
+  });
+
+  it('REPORT-016: trends and sales chart return total and by-shop series', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+
+    await request(app)
+      .post('/api/store-reports/admin-weekly')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .send({
+        entries: [
+          {
+            report_type: 'weekly_financial',
+            store_name: fixtures.shops.mainShop.name,
+            year: 2026,
+            month: 4,
+            week_number: 20,
+            week_range_label: '19/05 to 25/05',
+            metrics: { sales: 1500, income: 300, customerCount: 75 },
+          },
+          {
+            report_type: 'weekly_financial',
+            store_name: fixtures.shops.eastShop.name,
+            year: 2026,
+            month: 4,
+            week_number: 20,
+            week_range_label: '19/05 to 25/05',
+            metrics: { sales: 700, income: 130, customerCount: 35 },
+          },
+        ],
+      });
+
+    const trendsRes = await request(app)
+      .get('/api/store-reports/analytics/trends')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({
+        view: 'reconciled',
+        report_type: 'weekly_financial',
+        metric: 'revenue',
+        granularity: 'week',
+        top_n: 3,
+        selected_shop_id: fixtures.shops.mainShop._id.toString(),
+      });
+
+    expectEnvelope(trendsRes, 200);
+    expect(Array.isArray(trendsRes.body.data.total.series)).toBe(true);
+    expect(Array.isArray(trendsRes.body.data.shops)).toBe(true);
+    expect(trendsRes.body.data.shops.length).toBeGreaterThan(0);
+
+    const salesChartRes = await request(app)
+      .get('/api/store-reports/analytics/charts/sales')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({
+        view: 'reconciled',
+        report_type: 'weekly_financial',
+        granularity: 'week',
+        top_n: 3,
+        selected_shop_id: fixtures.shops.mainShop._id.toString(),
+      });
+
+    expectEnvelope(salesChartRes, 200);
+    expect(Array.isArray(salesChartRes.body.data.total.series)).toBe(true);
+    expect(Array.isArray(salesChartRes.body.data.shops)).toBe(true);
+    expect(salesChartRes.body.data.shops.length).toBeGreaterThan(0);
+  });
+
   it('REPORT-009: staff cannot access dashboard analytics endpoint', async () => {
     const staffLogin = await login('staff@org.com', 'Staff@1234');
 

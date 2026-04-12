@@ -1799,6 +1799,7 @@
           "name": "Dashboard Analytics (WoW + YoY)",
           "request": {
             "method": "GET",
+            "description": "All-in-one dashboard analytics payload with KPI cards, comparison blocks (WoW/YoY), growth trend, revenue by store, and channel split.\n\nUse this for initial dashboard load when one call is preferred.",
             "url": {
               "raw": "{{base_url}}/api/store-reports/analytics/dashboard?view=reconciled&report_type=weekly_financial&from=2026-04-05&to=2026-04-11&compare=both",
               "host": ["{{base_url}}"],
@@ -1806,23 +1807,311 @@
               "query": [
                 {
                   "key": "view",
-                  "value": "reconciled"
+                  "value": "reconciled",
+                  "description": "Data source view. Allowed: excel_raw, admin_weekly, reconciled. Default: reconciled."
                 },
                 {
                   "key": "report_type",
-                  "value": "weekly_financial"
+                  "value": "weekly_financial",
+                  "description": "Report data type. Allowed: weekly_financial, monthly_store_kpi. Default: weekly_financial."
                 },
                 {
                   "key": "from",
-                  "value": "2026-04-05"
+                  "value": "2026-04-05",
+                  "description": "Optional start date for analytics window."
                 },
                 {
                   "key": "to",
-                  "value": "2026-04-11"
+                  "value": "2026-04-11",
+                  "description": "Optional end date for analytics window."
                 },
                 {
                   "key": "compare",
-                  "value": "both"
+                  "value": "both",
+                  "description": "Comparison mode. Allowed: wow, yoy, both. Default: both."
+                },
+                {
+                  "key": "shop_id",
+                  "value": "",
+                  "disabled": true,
+                  "description": "Optional shop filter. Must be a valid Shop ObjectId within user scope."
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Analytics Summary",
+          "request": {
+            "method": "GET",
+            "description": "Returns KPI summary for selected filter window and optional WoW/YoY compare blocks.\n\nBest for top cards when FE does not need full dashboard payload.",
+            "url": {
+              "raw": "{{base_url}}/api/store-reports/analytics/summary?view=reconciled&report_type=weekly_financial&year=2026&month=4&week_number=15&from=2026-04-05&to=2026-04-11&compare=both",
+              "host": ["{{base_url}}"],
+              "path": ["api", "store-reports", "analytics", "summary"],
+              "query": [
+                {
+                  "key": "view",
+                  "value": "reconciled",
+                  "description": "Data source view. Allowed: excel_raw, admin_weekly, reconciled. Default: reconciled."
+                },
+                {
+                  "key": "report_type",
+                  "value": "weekly_financial",
+                  "description": "Report data type. Allowed: weekly_financial, monthly_store_kpi. Default: weekly_financial."
+                },
+                {
+                  "key": "year",
+                  "value": "2026",
+                  "description": "Optional year filter."
+                },
+                {
+                  "key": "month",
+                  "value": "4",
+                  "description": "Optional month filter (1-12)."
+                },
+                {
+                  "key": "week_number",
+                  "value": "15",
+                  "description": "Optional week number filter (1-53)."
+                },
+                {
+                  "key": "shop_id",
+                  "value": "",
+                  "disabled": true,
+                  "description": "Optional shop filter. Must be a valid Shop ObjectId within user scope."
+                },
+                {
+                  "key": "from",
+                  "value": "2026-04-05",
+                  "description": "Optional start date for analytics window."
+                },
+                {
+                  "key": "to",
+                  "value": "2026-04-11",
+                  "description": "Optional end date for analytics window."
+                },
+                {
+                  "key": "compare",
+                  "value": "both",
+                  "description": "Comparison mode. Allowed: wow, yoy, both. Default: both."
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Analytics Store Ranking",
+          "request": {
+            "method": "GET",
+            "description": "Returns store leaderboard ranked by selected metric.\n\nUseful for ranking table widgets and top/bottom store sections.",
+            "url": {
+              "raw": "{{base_url}}/api/store-reports/analytics/store-ranking?view=reconciled&report_type=weekly_financial&year=2026&month=4&week_number=15&from=2026-04-05&to=2026-04-11&metric=revenue&sort=desc&limit=20",
+              "host": ["{{base_url}}"],
+              "path": ["api", "store-reports", "analytics", "store-ranking"],
+              "query": [
+                {
+                  "key": "view",
+                  "value": "reconciled",
+                  "description": "Data source view. Allowed: excel_raw, admin_weekly, reconciled. Default: reconciled."
+                },
+                {
+                  "key": "report_type",
+                  "value": "weekly_financial",
+                  "description": "Report data type. Allowed: weekly_financial, monthly_store_kpi. Default: weekly_financial."
+                },
+                {
+                  "key": "year",
+                  "value": "2026",
+                  "description": "Optional year filter."
+                },
+                {
+                  "key": "month",
+                  "value": "4",
+                  "description": "Optional month filter (1-12)."
+                },
+                {
+                  "key": "week_number",
+                  "value": "15",
+                  "description": "Optional week number filter (1-53)."
+                },
+                {
+                  "key": "shop_id",
+                  "value": "",
+                  "disabled": true,
+                  "description": "Optional shop filter. Must be a valid Shop ObjectId within user scope."
+                },
+                {
+                  "key": "from",
+                  "value": "2026-04-05",
+                  "description": "Optional start date for analytics window."
+                },
+                {
+                  "key": "to",
+                  "value": "2026-04-11",
+                  "description": "Optional end date for analytics window."
+                },
+                {
+                  "key": "metric",
+                  "value": "revenue",
+                  "description": "Ranking metric. Allowed: revenue, profit, orders, averageOrderValue. Default: revenue."
+                },
+                {
+                  "key": "sort",
+                  "value": "desc",
+                  "description": "Sort direction. Allowed: asc, desc. Default: desc."
+                },
+                {
+                  "key": "limit",
+                  "value": "20",
+                  "description": "Maximum rows returned. Positive integer, capped by backend."
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Analytics Trends (Total + Shops)",
+          "request": {
+            "method": "GET",
+            "description": "Returns trend series for selected metric with total series plus by-shop series in one API.\n\nSupports selected shop pinning to guarantee shop line availability on FE.",
+            "url": {
+              "raw": "{{base_url}}/api/store-reports/analytics/trends?view=reconciled&report_type=weekly_financial&year=2026&month=4&week_number=15&from=2026-04-05&to=2026-04-11&metric=revenue&granularity=week&top_n=5",
+              "host": ["{{base_url}}"],
+              "path": ["api", "store-reports", "analytics", "trends"],
+              "query": [
+                {
+                  "key": "view",
+                  "value": "reconciled",
+                  "description": "Data source view. Allowed: excel_raw, admin_weekly, reconciled. Default: reconciled."
+                },
+                {
+                  "key": "report_type",
+                  "value": "weekly_financial",
+                  "description": "Report data type. Allowed: weekly_financial, monthly_store_kpi. Default: weekly_financial."
+                },
+                {
+                  "key": "year",
+                  "value": "2026",
+                  "description": "Optional year filter."
+                },
+                {
+                  "key": "month",
+                  "value": "4",
+                  "description": "Optional month filter (1-12)."
+                },
+                {
+                  "key": "week_number",
+                  "value": "15",
+                  "description": "Optional week number filter (1-53)."
+                },
+                {
+                  "key": "shop_id",
+                  "value": "",
+                  "disabled": true,
+                  "description": "Optional shop filter. Must be a valid Shop ObjectId within user scope."
+                },
+                {
+                  "key": "from",
+                  "value": "2026-04-05",
+                  "description": "Optional start date for analytics window."
+                },
+                {
+                  "key": "to",
+                  "value": "2026-04-11",
+                  "description": "Optional end date for analytics window."
+                },
+                {
+                  "key": "metric",
+                  "value": "revenue",
+                  "description": "Trend metric. Allowed: revenue, profit, orders, averageOrderValue. Default: revenue."
+                },
+                {
+                  "key": "granularity",
+                  "value": "week",
+                  "description": "Bucket size for trend points. Allowed: week, month. Default: week."
+                },
+                {
+                  "key": "top_n",
+                  "value": "5",
+                  "description": "Top N shops included in by-shop series. Positive integer."
+                },
+                {
+                  "key": "selected_shop_id",
+                  "value": "",
+                  "disabled": true,
+                  "description": "Optional selected shop id to always include in by-shop series."
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Analytics Sales Chart (Total + Shops)",
+          "request": {
+            "method": "GET",
+            "description": "Chart-focused sales API. Returns total sales trend and per-shop sales series together.\n\nDesigned for FE graph where user selects a shop while still seeing total line.",
+            "url": {
+              "raw": "{{base_url}}/api/store-reports/analytics/charts/sales?view=reconciled&report_type=weekly_financial&year=2026&month=4&week_number=15&from=2026-04-05&to=2026-04-11&granularity=week&top_n=8",
+              "host": ["{{base_url}}"],
+              "path": ["api", "store-reports", "analytics", "charts", "sales"],
+              "query": [
+                {
+                  "key": "view",
+                  "value": "reconciled",
+                  "description": "Data source view. Allowed: excel_raw, admin_weekly, reconciled. Default: reconciled."
+                },
+                {
+                  "key": "report_type",
+                  "value": "weekly_financial",
+                  "description": "Report data type. Allowed: weekly_financial, monthly_store_kpi. Default: weekly_financial."
+                },
+                {
+                  "key": "year",
+                  "value": "2026",
+                  "description": "Optional year filter."
+                },
+                {
+                  "key": "month",
+                  "value": "4",
+                  "description": "Optional month filter (1-12)."
+                },
+                {
+                  "key": "week_number",
+                  "value": "15",
+                  "description": "Optional week number filter (1-53)."
+                },
+                {
+                  "key": "shop_id",
+                  "value": "",
+                  "disabled": true,
+                  "description": "Optional shop filter. Must be a valid Shop ObjectId within user scope."
+                },
+                {
+                  "key": "from",
+                  "value": "2026-04-05",
+                  "description": "Optional start date for analytics window."
+                },
+                {
+                  "key": "to",
+                  "value": "2026-04-11",
+                  "description": "Optional end date for analytics window."
+                },
+                {
+                  "key": "granularity",
+                  "value": "week",
+                  "description": "Bucket size for trend points. Allowed: week, month. Default: week."
+                },
+                {
+                  "key": "top_n",
+                  "value": "8",
+                  "description": "Top N shops included by default. Positive integer."
+                },
+                {
+                  "key": "selected_shop_id",
+                  "value": "",
+                  "disabled": true,
+                  "description": "Optional selected shop id to always include in response."
                 }
               ]
             }

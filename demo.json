@@ -1,0 +1,225 @@
+{
+  "status": 200,
+  "message": "Store report analytics fetched successfully",
+  "data": {
+    "report_type": "weekly_financial",
+    "view": "reconciled",
+    "compare": "both",
+    "filters": {
+      "year": null,
+      "month": null,
+      "week_number": null,
+      "from": "2026-03-01",
+      "to": "2026-03-11",
+      "wow_from": "2026-02-01",
+      "wow_to": "2026-02-11",
+      "yoy_from": null,
+      "yoy_to": null,
+      "shop_id": null
+    },
+    "window": {
+      "from": "2026-03-01T00:00:00.000Z",
+      "to": "2026-03-11T23:59:59.999Z"
+    },
+    "comparison_windows": {
+      "current": {
+        "from": "2026-03-01T00:00:00.000Z",
+        "to": "2026-03-11T23:59:59.999Z",
+        "mode": "current"
+      },
+      "wow": {
+        "from": "2026-02-01T00:00:00.000Z",
+        "to": "2026-02-11T23:59:59.999Z",
+        "mode": "custom"
+      },
+      "yoy": {
+        "from": "2025-03-01T00:00:00.000Z",
+        "to": "2025-03-11T23:59:59.999Z",
+        "mode": "derived"
+      }
+    },
+    "kpis": {
+      "revenue": 23283.9,
+      "profit": 7092.84,
+      "orders": 1224.72,
+      "averageOrderValue": 19.01,
+      "channels": {
+        "justeat": 1969.06,
+        "ubereat": 1911.11,
+        "deliveroo": 1911.11,
+        "thirdParty": 5791.27,
+        "instore": 17492.63
+      }
+    },
+    "comparisons": {
+      "wow": {
+        "revenue": {
+          "current": 23283.9,
+          "previous": 22420.58,
+          "change": 863.32,
+          "changePct": 3.85
+        },
+        "profit": {
+          "current": 7092.84,
+          "previous": 6734.93,
+          "change": 357.91,
+          "changePct": 5.31
+        },
+        "orders": {
+          "current": 1224.72,
+          "previous": 1178.71,
+          "change": 46.01,
+          "changePct": 3.9
+        },
+        "averageOrderValue": {
+          "current": 19.01,
+          "previous": 19.02,
+          "change": -0.01,
+          "changePct": -0.05
+        }
+      },
+      "yoy": {
+        "revenue": {
+          "current": 23283.9,
+          "previous": 22422.03,
+          "change": 861.87,
+          "changePct": 3.84
+        },
+        "profit": {
+          "current": 7092.84,
+          "previous": 6558.53,
+          "change": 534.31,
+          "changePct": 8.15
+        },
+        "orders": {
+          "current": 1224.72,
+          "previous": 1179.42,
+          "change": 45.3,
+          "changePct": 3.84
+        },
+        "averageOrderValue": {
+          "current": 19.01,
+          "previous": 19.01,
+          "change": 0,
+          "changePct": 0
+        }
+      }
+    },
+    "charts": {
+      "growth": {
+        "current": [
+          {
+            "periodKey": "2026-03-W09",
+            "year": 2026,
+            "month": 3,
+            "weekNumber": 9,
+            "label": "01/03 to 01/03",
+            "revenue": 2882.14
+          },
+          {
+            "periodKey": "2026-03-W10",
+            "year": 2026,
+            "month": 3,
+            "weekNumber": 10,
+            "label": "02/03 to 08/03",
+            "revenue": 20401.76
+          }
+        ],
+        "wow": [
+          {
+            "periodKey": "2026-02-W05",
+            "year": 2026,
+            "month": 2,
+            "weekNumber": 5,
+            "label": "01/02 to 01/02",
+            "revenue": 2786.58
+          },
+          {
+            "periodKey": "2026-02-W06",
+            "year": 2026,
+            "month": 2,
+            "weekNumber": 6,
+            "label": "02/02 to 08/02",
+            "revenue": 19634
+          }
+        ],
+        "yoy": [
+          {
+            "periodKey": "2025-03-W09",
+            "year": 2025,
+            "month": 3,
+            "weekNumber": 9,
+            "label": "01/03 to 02/03",
+            "revenue": 4932.27
+          },
+          {
+            "periodKey": "2025-03-W10",
+            "year": 2025,
+            "month": 3,
+            "weekNumber": 10,
+            "label": "03/03 to 09/03",
+            "revenue": 17489.76
+          }
+        ]
+      },
+      "revenueByStore": [
+        {
+          "shopId": "69b9fce97bb57aa36f357818",
+          "shopName": "test home uk",
+          "revenue": 3630.49
+        },
+        {
+          "shopId": "69d1264819b1f9cead0e3fb4",
+          "shopName": "test",
+          "revenue": 3424.77
+        },
+        {
+          "shopId": "69c159baabe1d03947643933",
+          "shopName": "swiss cottage",
+          "revenue": 3219.06
+        },
+        {
+          "shopId": "69b980b92015a7d524578ce0",
+          "shopName": "Surat Test",
+          "revenue": 3013.34
+        },
+        {
+          "shopId": "69b96e909d8692506ab257df",
+          "shopName": "Main Branch",
+          "revenue": 2807.63
+        },
+        {
+          "shopId": "69b96e909d8692506ab257e0",
+          "shopName": "East Branch",
+          "revenue": 2601.92
+        },
+        {
+          "shopId": "69d90965d8a33ac6be0b298c",
+          "shopName": "Bulk Adjust Test Shop two",
+          "revenue": 2396.2
+        },
+        {
+          "shopId": "69d134ccc7e5f28c11cb09be",
+          "shopName": "Bulk Adjust Test Shop",
+          "revenue": 2190.49
+        }
+      ],
+      "revenueByChannel": {
+        "justeat": 1969.06,
+        "ubereat": 1911.11,
+        "deliveroo": 1911.11,
+        "thirdParty": 5791.27,
+        "instore": 17492.63
+      }
+    },
+    "capabilities": {
+      "hasDailyBreakdown": false,
+      "hasSlotBreakdown": false,
+      "notes": "Current data is stored weekly/monthly. Daily and slot heatmap analytics require additional day/slot metrics."
+    },
+    "table_api": {
+      "paginated": true,
+      "notes": "GET /api/store-reports/table supports optional pagination via page and limit query params."
+    }
+  }
+}
