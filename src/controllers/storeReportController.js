@@ -5,6 +5,7 @@ const StoreReportEntry = require('../models/StoreReportEntry');
 const AppError = require('../utils/AppError');
 const asyncHandler = require('../utils/asyncHandler');
 const { sendSuccess } = require('../utils/response');
+const { parsePagination, toPageMeta } = require('../utils/pagination');
 const { buildShopScope, isShopAllowed } = require('../middleware/shopScopeMiddleware');
 
 const WEEKLY_NUMERIC_FIELDS = [
@@ -763,8 +764,176 @@ async function bulkUpsertRecords(records, sourceType, actorId, sourceFile) {
   };
 }
 
-function toDatasetPayload(records, reportType) {
-  const rows = records.map(toTableRow).sort((a, b) => {
+function parsePaginationQuery(query) {
+  return parsePagination(query, {
+    defaultLimit: 20,
+    maxLimit: 200,
+  });
+}
+
+function parseIncludeWeeklyTotals(query) {
+  if (query.include_weekly_totals === undefined) return false;
+  const value = String(query.include_weekly_totals).toLowerCase();
+  return value === 'true' || value === '1' || value === 'yes';
+}
+
+function parsePaginationBasis(query) {
+  const basis = String(query.pagination_basis || 'row').toLowerCase();
+  if (!['row', 'week_number'].includes(basis)) {
+    throw new AppError('pagination_basis must be one of row, week_number', 400);
+  }
+  return basis;
+}
+
+function parseGroupBy(query) {
+  const groupBy = String(query.group_by || 'none').toLowerCase();
+  if (!['none', 'month'].includes(groupBy)) {
+    throw new AppError('group_by must be one of none, month', 400);
+  }
+  return groupBy;
+}
+
+function buildWeeklyTotals(rows, reportType) {
+  if (reportType !== 'weekly_financial') return [];
+
+  const grouped = new Map();
+
+  rows.forEach((row) => {
+    const weekNumber = row.weekNumber || 0;
+    const key = `${row.year}-${String(row.month).padStart(2, '0')}-W${String(weekNumber).padStart(2, '0')}`;
+
+    if (!grouped.has(key)) {
+      const initial = {
+        periodKey: key,
+        year: row.year,
+        month: row.month,
+        weekNumber,
+        weekRange: row.weekRange || null,
+        shopCount: 0,
+      };
+      WEEKLY_NUMERIC_FIELDS.forEach((field) => {
+        initial[field] = 0;
+      });
+      grouped.set(key, initial);
+    }
+
+    const bucket = grouped.get(key);
+    bucket.shopCount += 1;
+    if (!bucket.weekRange && row.weekRange) bucket.weekRange = row.weekRange;
+    WEEKLY_NUMERIC_FIELDS.forEach((field) => {
+      bucket[field] = round2(bucket[field] + (Number(row[field]) || 0));
+    });
+  });
+
+  return Array.from(grouped.values()).sort((a, b) => {
+    const yearDiff = (a.year || 0) - (b.year || 0);
+    if (yearDiff !== 0) return yearDiff;
+    const monthDiff = (a.month || 0) - (b.month || 0);
+    if (monthDiff !== 0) return monthDiff;
+    return (a.weekNumber || 0) - (b.weekNumber || 0);
+  });
+}
+
+function deriveMonthlyRowsFromWeekly(rows) {
+  const pickMetric = (metrics, aliases) => {
+    if (!metrics || typeof metrics !== 'object') return null;
+
+    const lookup = new Map();
+    Object.entries(metrics).forEach(([key, value]) => {
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        lookup.set(normalizeMetricAlias(key), value);
+      }
+    });
+
+    for (let i = 0; i < aliases.length; i += 1) {
+      const found = lookup.get(normalizeMetricAlias(aliases[i]));
+      if (typeof found === 'number') return found;
+    }
+
+    return null;
+  };
+
+  const grouped = new Map();
+
+  rows.forEach((row) => {
+    const key = `${row.shopId}::${row.year}-${String(row.month || 0).padStart(2, '0')}`;
+
+    if (!grouped.has(key)) {
+      const seed = {
+        id: `derived-${key}`,
+        shopId: row.shopId,
+        shopName: row.shopName,
+        year: row.year,
+        month: row.month,
+        weekNumber: null,
+        weekRange: null,
+        sourceType: 'derived_monthly_from_weekly',
+        metrics: {},
+      };
+      WEEKLY_NUMERIC_FIELDS.forEach((field) => {
+        seed[field] = 0;
+        seed.metrics[field] = 0;
+      });
+      seed._derived = {
+        total3pdSale: 0,
+      };
+      grouped.set(key, seed);
+    }
+
+    const bucket = grouped.get(key);
+    WEEKLY_NUMERIC_FIELDS.forEach((field) => {
+      bucket[field] = round2(bucket[field] + (Number(row[field]) || 0));
+      bucket.metrics[field] = bucket[field];
+    });
+
+    Object.entries(row.metrics || {}).forEach(([metricKey, metricValue]) => {
+      if (typeof metricValue !== 'number' || !Number.isFinite(metricValue)) return;
+      const prev = Number(bucket.metrics[metricKey]) || 0;
+      bucket.metrics[metricKey] = round2(prev + metricValue);
+    });
+
+    const total3pdSale = pickMetric(row.metrics, ['Total 3PD Sale', 'total3pdSale', '3pd sale']);
+    if (typeof total3pdSale === 'number') {
+      bucket._derived.total3pdSale = round2(bucket._derived.total3pdSale + total3pdSale);
+    }
+  });
+
+  return Array.from(grouped.values())
+    .map((row) => {
+      const computedTotal = round2(
+        (Number(row.labour) || 0) +
+          (Number(row.vat18) || 0) +
+          (Number(row.royalties) || 0) +
+          (Number(row.foodCost22) || 0) +
+          (Number(row.commission) || 0)
+      );
+      row.total = computedTotal;
+      row.income = round2((Number(row.net) || 0) - computedTotal);
+
+      if (row._derived.total3pdSale > 0) {
+        row.commissionPercentage = round2(
+          (Number(row.commission) || 0) / row._derived.total3pdSale
+        );
+      }
+
+      WEEKLY_NUMERIC_FIELDS.forEach((field) => {
+        row.metrics[field] = row[field];
+      });
+
+      delete row._derived;
+      return row;
+    })
+    .sort((a, b) => {
+      const yearDiff = (a.year || 0) - (b.year || 0);
+      if (yearDiff !== 0) return yearDiff;
+      const monthDiff = (a.month || 0) - (b.month || 0);
+      if (monthDiff !== 0) return monthDiff;
+      return String(a.shopName || '').localeCompare(String(b.shopName || ''));
+    });
+}
+
+function toDatasetPayloadWithPagination(records, reportType, pagination, options = {}) {
+  let rows = records.map(toTableRow).sort((a, b) => {
     const yearDiff = (a.year || 0) - (b.year || 0);
     if (yearDiff !== 0) return yearDiff;
     const monthDiff = (a.month || 0) - (b.month || 0);
@@ -774,18 +943,371 @@ function toDatasetPayload(records, reportType) {
     return String(a.shopName || '').localeCompare(String(b.shopName || ''));
   });
 
-  return {
-    rows,
+  if (options.groupBy === 'month' && reportType === 'weekly_financial') {
+    rows = deriveMonthlyRowsFromWeekly(rows);
+  }
+
+  const paginationBasis = options.paginationBasis || 'row';
+
+  if (paginationBasis === 'week_number') {
+    const groups = new Map();
+
+    rows.forEach((row) => {
+      const weekNumber = row.weekNumber || 0;
+      const key = `${row.year}-${String(row.month || 0).padStart(2, '0')}-W${String(weekNumber).padStart(2, '0')}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(row);
+    });
+
+    const groupedRows = Array.from(groups.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+    const totalWeeks = groupedRows.length;
+    const totalPages = Math.max(1, Math.ceil(totalWeeks / pagination.limit));
+    const safePage = Math.min(pagination.page, totalPages);
+    const weekOffset = (safePage - 1) * pagination.limit;
+    const selectedGroups = groupedRows.slice(weekOffset, weekOffset + pagination.limit);
+    const pagedRows = selectedGroups.flatMap(([, weekRows]) => weekRows);
+    const pageMeta = toPageMeta(totalWeeks, safePage, pagination.limit, selectedGroups.length);
+
+    const payload = {
+      rows: pagedRows,
+      totals: buildTotals(rows, reportType),
+      count: rows.length,
+      pagination: {
+        enabled: true,
+        basis: 'week_number',
+        ...pageMeta,
+        page_count: pageMeta.total_pages,
+        has_next: pageMeta.page < pageMeta.total_pages,
+        has_prev: pageMeta.page > 1,
+        total_weeks: totalWeeks,
+        rows_in_page: pagedRows.length,
+      },
+    };
+
+    if (options.includeWeeklyTotals) {
+      payload.weekly_totals = buildWeeklyTotals(rows, reportType);
+    }
+
+    return payload;
+  }
+
+  const total = rows.length;
+  const totalPages = Math.max(1, Math.ceil(total / pagination.limit));
+  const safePage = Math.min(pagination.page, totalPages);
+  const offset = (safePage - 1) * pagination.limit;
+  const pagedRows = rows.slice(offset, offset + pagination.limit);
+  const pageMeta = toPageMeta(total, safePage, pagination.limit, pagedRows.length);
+
+  const payload = {
+    rows: pagedRows,
     totals: buildTotals(rows, reportType),
-    count: rows.length,
+    count: total,
+    pagination: {
+      enabled: true,
+      basis: 'row',
+      ...pageMeta,
+      page_count: pageMeta.total_pages,
+      has_next: pageMeta.page < pageMeta.total_pages,
+      has_prev: pageMeta.page > 1,
+    },
   };
+
+  if (options.includeWeeklyTotals) {
+    payload.weekly_totals = buildWeeklyTotals(rows, reportType);
+  }
+
+  return payload;
+}
+
+function normalizeMetricAlias(key) {
+  return normalizeText(key)
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+}
+
+function readMetric(metrics, aliases, fallback = 0) {
+  if (!metrics || typeof metrics !== 'object') return fallback;
+
+  const numericLookup = new Map();
+  Object.entries(metrics).forEach(([key, value]) => {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      numericLookup.set(normalizeMetricAlias(key), value);
+    }
+  });
+
+  for (let i = 0; i < aliases.length; i += 1) {
+    const value = numericLookup.get(normalizeMetricAlias(aliases[i]));
+    if (typeof value === 'number') return value;
+  }
+
+  return fallback;
+}
+
+function metricsForRecord(record) {
+  const metrics = record.metrics || {};
+
+  const revenue = readMetric(metrics, [
+    'sales',
+    'gross sales',
+    'grossSale',
+    'gross_sale',
+    'revenue',
+    'net sales',
+    'netSale',
+  ]);
+
+  const profit = readMetric(metrics, ['income', 'profit', 'net profit', 'net']);
+  const orders = readMetric(metrics, ['customer count', 'orders', 'order count']);
+  const aovFromMetric = readMetric(metrics, ['average order value', 'aov']);
+
+  const justeat = readMetric(metrics, ['justeat sale', 'just eat sale', 'justeat']);
+  const ubereat = readMetric(metrics, ['ubereat sale', 'uber eat sale', 'ubereat']);
+  const deliveroo = readMetric(metrics, ['deliveroo sale', 'deliveroo']);
+  const thirdPartyTotal = readMetric(
+    metrics,
+    ['total 3pd sale', '3pd sale'],
+    justeat + ubereat + deliveroo
+  );
+  const inStore = round2(Math.max(revenue - thirdPartyTotal, 0));
+
+  return {
+    revenue,
+    profit,
+    orders,
+    aov: orders > 0 ? revenue / orders : aovFromMetric,
+    channels: {
+      justeat,
+      ubereat,
+      deliveroo,
+      thirdParty: thirdPartyTotal,
+      instore: inStore,
+    },
+  };
+}
+
+function summarizeKpis(records) {
+  const totals = records.reduce(
+    (acc, record) => {
+      const rowMetrics = metricsForRecord(record);
+      acc.revenue += rowMetrics.revenue;
+      acc.profit += rowMetrics.profit;
+      acc.orders += rowMetrics.orders;
+      acc.channels.justeat += rowMetrics.channels.justeat;
+      acc.channels.ubereat += rowMetrics.channels.ubereat;
+      acc.channels.deliveroo += rowMetrics.channels.deliveroo;
+      acc.channels.thirdParty += rowMetrics.channels.thirdParty;
+      acc.channels.instore += rowMetrics.channels.instore;
+      return acc;
+    },
+    {
+      revenue: 0,
+      profit: 0,
+      orders: 0,
+      channels: {
+        justeat: 0,
+        ubereat: 0,
+        deliveroo: 0,
+        thirdParty: 0,
+        instore: 0,
+      },
+    }
+  );
+
+  return {
+    revenue: round2(totals.revenue),
+    profit: round2(totals.profit),
+    orders: round2(totals.orders),
+    averageOrderValue: totals.orders > 0 ? round2(totals.revenue / totals.orders) : 0,
+    channels: {
+      justeat: round2(totals.channels.justeat),
+      ubereat: round2(totals.channels.ubereat),
+      deliveroo: round2(totals.channels.deliveroo),
+      thirdParty: round2(totals.channels.thirdParty),
+      instore: round2(totals.channels.instore),
+    },
+  };
+}
+
+function computeDelta(current, previous) {
+  const change = round2(current - previous);
+  const changePct = previous === 0 ? null : round2((change / previous) * 100);
+  return { current: round2(current), previous: round2(previous), change, changePct };
+}
+
+function parseDate(value, fieldName) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    throw new AppError(`${fieldName} must be a valid date`, 400);
+  }
+  return date;
+}
+
+function deriveDateWindow(req, rows) {
+  const fromInput = parseDate(req.query.from, 'from');
+  const toInput = parseDate(req.query.to, 'to');
+
+  if (fromInput && toInput) {
+    const from = toUtcDayStart(fromInput);
+    const to = toUtcDayEnd(toInput);
+    if (from > to) throw new AppError('from must be before to', 400);
+    return { from, to };
+  }
+
+  const datedRows = rows.filter((row) => row.week_start && row.week_end);
+  if (datedRows.length === 0) return null;
+
+  const minStart = datedRows.reduce(
+    (min, row) => (row.week_start < min ? row.week_start : min),
+    datedRows[0].week_start
+  );
+  const maxEnd = datedRows.reduce(
+    (max, row) => (row.week_end > max ? row.week_end : max),
+    datedRows[0].week_end
+  );
+
+  return { from: toUtcDayStart(minStart), to: toUtcDayEnd(maxEnd) };
+}
+
+function shiftWindow(window, mode) {
+  if (!window) return null;
+
+  if (mode === 'yoy') {
+    return {
+      from: new Date(
+        Date.UTC(
+          window.from.getUTCFullYear() - 1,
+          window.from.getUTCMonth(),
+          window.from.getUTCDate(),
+          0,
+          0,
+          0,
+          0
+        )
+      ),
+      to: new Date(
+        Date.UTC(
+          window.to.getUTCFullYear() - 1,
+          window.to.getUTCMonth(),
+          window.to.getUTCDate(),
+          23,
+          59,
+          59,
+          999
+        )
+      ),
+    };
+  }
+
+  const spanMs = window.to.getTime() - window.from.getTime() + 1;
+  return {
+    from: new Date(window.from.getTime() - spanMs),
+    to: new Date(window.to.getTime() - spanMs),
+  };
+}
+
+function isWithinWindow(record, window) {
+  if (!window) return true;
+  if (!record.week_start || !record.week_end) return false;
+  return record.week_start >= window.from && record.week_end <= window.to;
+}
+
+function buildTrend(rows) {
+  const grouped = new Map();
+
+  rows.forEach((row) => {
+    const key = row.period_key;
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        periodKey: key,
+        year: row.year,
+        month: row.month,
+        weekNumber: row.week_number,
+        label:
+          row.week_range_label ||
+          (row.week_number
+            ? `W${String(row.week_number).padStart(2, '0')} ${String(row.month).padStart(2, '0')}/${row.year}`
+            : `${String(row.month).padStart(2, '0')}/${row.year}`),
+        revenue: 0,
+      });
+    }
+
+    const bucket = grouped.get(key);
+    bucket.revenue += metricsForRecord(row).revenue;
+  });
+
+  return Array.from(grouped.values())
+    .map((entry) => ({
+      ...entry,
+      revenue: round2(entry.revenue),
+    }))
+    .sort((a, b) => {
+      const yearDiff = (a.year || 0) - (b.year || 0);
+      if (yearDiff !== 0) return yearDiff;
+      const monthDiff = (a.month || 0) - (b.month || 0);
+      if (monthDiff !== 0) return monthDiff;
+      return (a.weekNumber || 0) - (b.weekNumber || 0);
+    });
+}
+
+function buildStoreBreakdown(rows) {
+  const grouped = new Map();
+
+  rows.forEach((row) => {
+    const key = String(row.shop_id?._id || row.shop_id);
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        shopId: key,
+        shopName: row.shop_id?.name || row.store_name_raw || key,
+        revenue: 0,
+      });
+    }
+
+    grouped.get(key).revenue += metricsForRecord(row).revenue;
+  });
+
+  return Array.from(grouped.values())
+    .map((entry) => ({ ...entry, revenue: round2(entry.revenue) }))
+    .sort((a, b) => b.revenue - a.revenue);
+}
+
+function buildComparisonPayload(currentRows, previousRows) {
+  const current = summarizeKpis(currentRows);
+  const previous = summarizeKpis(previousRows);
+
+  return {
+    revenue: computeDelta(current.revenue, previous.revenue),
+    profit: computeDelta(current.profit, previous.profit),
+    orders: computeDelta(current.orders, previous.orders),
+    averageOrderValue: computeDelta(current.averageOrderValue, previous.averageOrderValue),
+  };
+}
+
+async function loadRowsByView(filter, view) {
+  if (view === 'excel_raw' || view === 'admin_weekly') {
+    const rows = await StoreReportEntry.find({ ...filter, source_type: view }).populate(
+      'shop_id',
+      'name'
+    );
+    return {
+      excelRows: view === 'excel_raw' ? rows : [],
+      adminRows: view === 'admin_weekly' ? rows : [],
+    };
+  }
+
+  const [excelRows, adminRows] = await Promise.all([
+    StoreReportEntry.find({ ...filter, source_type: 'excel_raw' }).populate('shop_id', 'name'),
+    StoreReportEntry.find({ ...filter, source_type: 'admin_weekly' }).populate('shop_id', 'name'),
+  ]);
+
+  return { excelRows, adminRows };
 }
 
 const importExcelData = asyncHandler(async (req, res) => {
   let xlsx;
   try {
     // Keep xlsx require lazy so APIs not using import don't crash if package missing.
-     
+
     xlsx = require('xlsx');
   } catch {
     throw new AppError('xlsx dependency is missing. Run npm install.', 500);
@@ -961,6 +1483,25 @@ const getStoreReportTable = asyncHandler(async (req, res) => {
   }
 
   const filter = { report_type: reportType };
+  const includeWeeklyTotals = parseIncludeWeeklyTotals(req.query);
+  const paginationBasis = parsePaginationBasis(req.query);
+  const groupBy = parseGroupBy(req.query);
+
+  if (groupBy === 'month' && reportType !== 'weekly_financial') {
+    throw new AppError('group_by=month is supported only with report_type=weekly_financial', 400);
+  }
+
+  if (groupBy === 'month' && paginationBasis === 'week_number') {
+    throw new AppError('pagination_basis=week_number is not supported with group_by=month', 400);
+  }
+
+  if (includeWeeklyTotals && reportType !== 'weekly_financial') {
+    throw new AppError('include_weekly_totals is supported only for weekly_financial', 400);
+  }
+
+  if (includeWeeklyTotals && groupBy === 'month') {
+    throw new AppError('include_weekly_totals is not supported with group_by=month', 400);
+  }
 
   if (req.query.year) filter.year = Number(req.query.year);
   if (req.query.month) filter.month = Number(req.query.month);
@@ -968,6 +1509,7 @@ const getStoreReportTable = asyncHandler(async (req, res) => {
 
   const shopScope = buildShopScope(req.user);
   const scopedFilter = applyShopReadFilter(filter, req, shopScope);
+  const pagination = parsePaginationQuery(req.query);
 
   const [excelRows, adminRows] = await Promise.all([
     StoreReportEntry.find({ ...scopedFilter, source_type: 'excel_raw' }).populate(
@@ -983,16 +1525,34 @@ const getStoreReportTable = asyncHandler(async (req, res) => {
   const reconciledRows = mergeRecords(excelRows, adminRows);
 
   const datasets = {
-    excel_raw: toDatasetPayload(excelRows, reportType),
-    admin_weekly: toDatasetPayload(adminRows, reportType),
-    reconciled: toDatasetPayload(reconciledRows, reportType),
+    excel_raw: toDatasetPayloadWithPagination(excelRows, reportType, pagination, {
+      includeWeeklyTotals,
+      paginationBasis,
+      groupBy,
+    }),
+    admin_weekly: toDatasetPayloadWithPagination(adminRows, reportType, pagination, {
+      includeWeeklyTotals,
+      paginationBasis,
+      groupBy,
+    }),
+    reconciled: toDatasetPayloadWithPagination(reconciledRows, reportType, pagination, {
+      includeWeeklyTotals,
+      paginationBasis,
+      groupBy,
+    }),
   };
+
+  const columns =
+    groupBy === 'month' && reportType === 'weekly_financial'
+      ? REPORT_COLUMNS.weekly_financial
+      : REPORT_COLUMNS[reportType];
 
   if (view === 'all') {
     return sendSuccess(res, 'Store report tables fetched successfully', {
       view,
       report_type: reportType,
-      columns: REPORT_COLUMNS[reportType],
+      group_by: groupBy,
+      columns,
       tables: datasets,
       source_counts: {
         excel_raw: excelRows.length,
@@ -1004,7 +1564,8 @@ const getStoreReportTable = asyncHandler(async (req, res) => {
   return sendSuccess(res, 'Store report table fetched successfully', {
     view,
     report_type: reportType,
-    columns: REPORT_COLUMNS[reportType],
+    group_by: groupBy,
+    columns,
     ...datasets[view],
     source_counts: {
       excel_raw: excelRows.length,
@@ -1013,8 +1574,95 @@ const getStoreReportTable = asyncHandler(async (req, res) => {
   });
 });
 
+const getStoreReportDashboardAnalytics = asyncHandler(async (req, res) => {
+  const reportType = req.query.report_type || 'weekly_financial';
+  const view = req.query.view || 'reconciled';
+  const compare = req.query.compare || 'both';
+
+  if (!['weekly_financial', 'monthly_store_kpi'].includes(reportType)) {
+    throw new AppError('report_type must be weekly_financial or monthly_store_kpi', 400);
+  }
+
+  if (!['excel_raw', 'admin_weekly', 'reconciled'].includes(view)) {
+    throw new AppError('view must be one of excel_raw, admin_weekly, reconciled', 400);
+  }
+
+  if (!['wow', 'yoy', 'both'].includes(compare)) {
+    throw new AppError('compare must be one of wow, yoy, both', 400);
+  }
+
+  const filter = { report_type: reportType };
+  if (req.query.year) filter.year = Number(req.query.year);
+  if (req.query.month) filter.month = Number(req.query.month);
+  if (req.query.week_number) filter.week_number = Number(req.query.week_number);
+
+  const shopScope = buildShopScope(req.user);
+  const scopedFilter = applyShopReadFilter(filter, req, shopScope);
+
+  const { excelRows, adminRows } = await loadRowsByView(scopedFilter, view);
+  const currentRows =
+    view === 'reconciled' ? mergeRecords(excelRows, adminRows) : [...excelRows, ...adminRows];
+
+  const currentWindow = deriveDateWindow(req, currentRows);
+  const rowsInWindow = currentWindow
+    ? currentRows.filter((row) => isWithinWindow(row, currentWindow))
+    : currentRows;
+
+  const wowWindow = compare === 'yoy' ? null : shiftWindow(currentWindow, 'wow');
+  const yoyWindow = compare === 'wow' ? null : shiftWindow(currentWindow, 'yoy');
+
+  const wowRows = wowWindow ? currentRows.filter((row) => isWithinWindow(row, wowWindow)) : [];
+  const yoyRows = yoyWindow ? currentRows.filter((row) => isWithinWindow(row, yoyWindow)) : [];
+
+  return sendSuccess(res, 'Store report analytics fetched successfully', {
+    report_type: reportType,
+    view,
+    compare,
+    filters: {
+      year: req.query.year ? Number(req.query.year) : null,
+      month: req.query.month ? Number(req.query.month) : null,
+      week_number: req.query.week_number ? Number(req.query.week_number) : null,
+      from: req.query.from || null,
+      to: req.query.to || null,
+      shop_id: req.query.shop_id || null,
+    },
+    window: currentWindow
+      ? {
+          from: currentWindow.from,
+          to: currentWindow.to,
+        }
+      : null,
+    kpis: summarizeKpis(rowsInWindow),
+    comparisons: {
+      wow: wowWindow ? buildComparisonPayload(rowsInWindow, wowRows) : null,
+      yoy: yoyWindow ? buildComparisonPayload(rowsInWindow, yoyRows) : null,
+    },
+    charts: {
+      growth: {
+        current: buildTrend(rowsInWindow),
+        wow: buildTrend(wowRows),
+        yoy: buildTrend(yoyRows),
+      },
+      revenueByStore: buildStoreBreakdown(rowsInWindow),
+      revenueByChannel: summarizeKpis(rowsInWindow).channels,
+    },
+    capabilities: {
+      hasDailyBreakdown: false,
+      hasSlotBreakdown: false,
+      notes:
+        'Current data is stored weekly/monthly. Daily and slot heatmap analytics require additional day/slot metrics.',
+    },
+    table_api: {
+      paginated: true,
+      notes:
+        'GET /api/store-reports/table supports optional pagination via page and limit query params.',
+    },
+  });
+});
+
 module.exports = {
   importExcelData,
   upsertAdminWeeklyData,
   getStoreReportTable,
+  getStoreReportDashboardAnalytics,
 };

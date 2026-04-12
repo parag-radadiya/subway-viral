@@ -7,6 +7,7 @@
     "dev": "nodemon src/server.js",
     "seed": "node src/config/seed.js",
     "seed:bulk-adjust-test": "node src/config/seedBulkAdjustTestData.js",
+    "seed:store-reports-dummy": "node src/config/seedStoreReportsDummyData.js",
     "migrate:attendance-adjust-permission": "node src/config/migrations/grantAttendanceAdjustPermission.js",
     "test": "jest --runInBand",
     "test:watch": "jest --watch",
@@ -17,7 +18,8 @@
     "format": "prettier . --write",
     "format:check": "prettier . --check",
     "quality:check": "npm run lint && npm run format:check && npm run test:coverage",
-    "prepare": "husky"
+    "prepare": "husky",
+    "cloud-flaire": "cloudflared tunnel --url http://localhost:3000"
   },
   "keywords": [],
   "author": "",

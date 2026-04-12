@@ -383,4 +383,394 @@ describe('Store reports integration', () => {
     expect(febRow.sales).toBe(400);
     expect(febRow.metrics.ubereatSale).toBe(120);
   });
+
+  it('REPORT-008: dashboard analytics returns KPI totals, channel split and wow comparison', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+
+    await request(app)
+      .post('/api/store-reports/admin-weekly')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .send({
+        entries: [
+          {
+            report_type: 'weekly_financial',
+            store_name: fixtures.shops.mainShop.name,
+            year: 2026,
+            month: 4,
+            week_number: 14,
+            week_range_label: '29/03 to 04/04',
+            metrics: {
+              sales: 1600,
+              income: 320,
+              customerCount: 80,
+              justeatSale: 200,
+              ubereatSale: 100,
+              deliverooSale: 100,
+            },
+          },
+          {
+            report_type: 'weekly_financial',
+            store_name: fixtures.shops.mainShop.name,
+            year: 2026,
+            month: 4,
+            week_number: 15,
+            week_range_label: '05/04 to 11/04',
+            metrics: {
+              sales: 2000,
+              income: 400,
+              customerCount: 100,
+              justeatSale: 300,
+              ubereatSale: 150,
+              deliverooSale: 150,
+            },
+          },
+        ],
+      });
+
+    const analyticsRes = await request(app)
+      .get('/api/store-reports/analytics/dashboard')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({
+        view: 'reconciled',
+        report_type: 'weekly_financial',
+        from: '2026-04-05',
+        to: '2026-04-11',
+        compare: 'both',
+      });
+
+    expectEnvelope(analyticsRes, 200);
+    expect(analyticsRes.body.data.kpis.revenue).toBe(2000);
+    expect(analyticsRes.body.data.kpis.profit).toBe(400);
+    expect(analyticsRes.body.data.kpis.orders).toBe(100);
+    expect(analyticsRes.body.data.kpis.averageOrderValue).toBe(20);
+    expect(analyticsRes.body.data.kpis.channels.justeat).toBe(300);
+    expect(analyticsRes.body.data.comparisons.wow.revenue.previous).toBe(1600);
+    expect(analyticsRes.body.data.table_api.paginated).toBe(true);
+  });
+
+  it('REPORT-010: table supports optional pagination with count metadata', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+
+    await request(app)
+      .post('/api/store-reports/admin-weekly')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .send({
+        entries: [
+          {
+            report_type: 'weekly_financial',
+            store_name: fixtures.shops.mainShop.name,
+            year: 2026,
+            month: 4,
+            week_number: 13,
+            week_range_label: '01/04 to 07/04',
+            metrics: { sales: 1100, net: 800 },
+          },
+          {
+            report_type: 'weekly_financial',
+            store_name: fixtures.shops.mainShop.name,
+            year: 2026,
+            month: 4,
+            week_number: 14,
+            week_range_label: '08/04 to 14/04',
+            metrics: { sales: 1200, net: 850 },
+          },
+          {
+            report_type: 'weekly_financial',
+            store_name: fixtures.shops.mainShop.name,
+            year: 2026,
+            month: 4,
+            week_number: 15,
+            week_range_label: '15/04 to 21/04',
+            metrics: { sales: 1300, net: 900 },
+          },
+        ],
+      });
+
+    const tableRes = await request(app)
+      .get('/api/store-reports/table')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({
+        view: 'admin_weekly',
+        report_type: 'weekly_financial',
+        year: 2026,
+        month: 4,
+        page: 2,
+        limit: 2,
+      });
+
+    expectEnvelope(tableRes, 200);
+    expect(tableRes.body.data.count).toBe(3);
+    expect(tableRes.body.data.rows).toHaveLength(1);
+    expect(tableRes.body.data.pagination.enabled).toBe(true);
+    expect(tableRes.body.data.pagination.basis).toBe('row');
+    expect(tableRes.body.data.pagination.page).toBe(2);
+    expect(tableRes.body.data.pagination.limit).toBe(2);
+    expect(tableRes.body.data.pagination.total).toBe(3);
+    expect(tableRes.body.data.pagination.total_pages).toBe(2);
+    expect(tableRes.body.data.pagination.page_count).toBe(2);
+    expect(tableRes.body.data.pagination.has_prev).toBe(true);
+    expect(tableRes.body.data.pagination.has_next).toBe(false);
+  });
+
+  it('REPORT-012: week_number pagination keeps complete week rows together', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+
+    const upsertRes = await request(app)
+      .post('/api/store-reports/admin-weekly')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .send({
+        entries: [
+          {
+            report_type: 'weekly_financial',
+            store_name: fixtures.shops.mainShop.name,
+            year: 2026,
+            month: 4,
+            week_number: 20,
+            week_range_label: '20/05 to 26/05',
+            metrics: { sales: 1000, net: 700 },
+          },
+          {
+            report_type: 'weekly_financial',
+            store_name: fixtures.shops.eastShop.name,
+            year: 2026,
+            month: 4,
+            week_number: 20,
+            week_range_label: '20/05 to 26/05',
+            metrics: { sales: 600, net: 400 },
+          },
+          {
+            report_type: 'weekly_financial',
+            store_name: fixtures.shops.mainShop.name,
+            year: 2026,
+            month: 4,
+            week_number: 21,
+            week_range_label: '27/05 to 31/05',
+            metrics: { sales: 900, net: 650 },
+          },
+        ],
+      });
+
+    expectEnvelope(upsertRes, 200);
+
+    const page1Res = await request(app)
+      .get('/api/store-reports/table')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({
+        view: 'admin_weekly',
+        report_type: 'weekly_financial',
+        year: 2026,
+        page: 1,
+        limit: 1,
+        pagination_basis: 'week_number',
+      });
+
+    expectEnvelope(page1Res, 200);
+    expect(page1Res.body.data.pagination.basis).toBe('week_number');
+    expect(page1Res.body.data.pagination.total_weeks).toBe(2);
+    expect(page1Res.body.data.pagination.count).toBe(1);
+    expect(page1Res.body.data.rows).toHaveLength(2);
+    expect(page1Res.body.data.rows.every((row) => row.weekNumber === 20)).toBe(true);
+
+    const page2Res = await request(app)
+      .get('/api/store-reports/table')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({
+        view: 'admin_weekly',
+        report_type: 'weekly_financial',
+        year: 2026,
+        page: 2,
+        limit: 1,
+        pagination_basis: 'week_number',
+      });
+
+    expectEnvelope(page2Res, 200);
+    expect(page2Res.body.data.rows).toHaveLength(1);
+    expect(page2Res.body.data.rows[0].weekNumber).toBe(21);
+  });
+
+  it('REPORT-013: group_by=month derives monthly rows from weekly_financial data', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+
+    await request(app)
+      .post('/api/store-reports/admin-weekly')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .send({
+        entries: [
+          {
+            report_type: 'weekly_financial',
+            store_name: fixtures.shops.mainShop.name,
+            year: 2026,
+            month: 4,
+            week_number: 17,
+            week_range_label: '01/04 to 07/04',
+            metrics: {
+              sales: 1000,
+              net: 700,
+              labour: 100,
+              vat18: 80,
+              royalties: 20,
+              foodCost22: 140,
+              commission: 100,
+              total: 340,
+              income: 360,
+              'Total 3PD Sale': 200,
+            },
+          },
+          {
+            report_type: 'weekly_financial',
+            store_name: fixtures.shops.mainShop.name,
+            year: 2026,
+            month: 4,
+            week_number: 18,
+            week_range_label: '08/04 to 14/04',
+            metrics: {
+              sales: 600,
+              net: 450,
+              labour: 60,
+              vat18: 50,
+              royalties: 10,
+              foodCost22: 90,
+              commission: 50,
+              total: 210,
+              income: 240,
+              'Total 3PD Sale': 100,
+            },
+          },
+          {
+            report_type: 'weekly_financial',
+            store_name: fixtures.shops.eastShop.name,
+            year: 2026,
+            month: 4,
+            week_number: 17,
+            week_range_label: '01/04 to 07/04',
+            metrics: {
+              sales: 500,
+              net: 350,
+              labour: 40,
+              vat18: 30,
+              royalties: 10,
+              foodCost22: 70,
+              commission: 20,
+              total: 170,
+              income: 180,
+              'Total 3PD Sale': 50,
+            },
+          },
+        ],
+      });
+
+    const tableRes = await request(app)
+      .get('/api/store-reports/table')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({
+        view: 'admin_weekly',
+        report_type: 'weekly_financial',
+        year: 2026,
+        month: 4,
+        group_by: 'month',
+        page: 1,
+        limit: 10,
+      });
+
+    expectEnvelope(tableRes, 200);
+    expect(tableRes.body.data.group_by).toBe('month');
+    expect(tableRes.body.data.columns.map((col) => col.key)).toEqual([
+      'shopName',
+      'weekNumber',
+      'weekRange',
+      'sales',
+      'net',
+      'labour',
+      'vat18',
+      'royalties',
+      'foodCost22',
+      'commission',
+      'commissionPercentage',
+      'total',
+      'income',
+    ]);
+    expect(tableRes.body.data.rows).toHaveLength(2);
+
+    const mainRow = tableRes.body.data.rows.find(
+      (row) => String(row.shopId) === String(fixtures.shops.mainShop._id)
+    );
+    const eastRow = tableRes.body.data.rows.find(
+      (row) => String(row.shopId) === String(fixtures.shops.eastShop._id)
+    );
+
+    expect(mainRow.sales).toBe(1600);
+    expect(mainRow.net).toBe(1150);
+    expect(mainRow.total).toBe(700);
+    expect(mainRow.income).toBe(450);
+    expect(mainRow.commissionPercentage).toBe(0.5);
+    expect(mainRow.sourceType).toBe('derived_monthly_from_weekly');
+
+    expect(eastRow.sales).toBe(500);
+    expect(eastRow.net).toBe(350);
+    expect(eastRow.total).toBe(170);
+    expect(eastRow.income).toBe(180);
+  });
+
+  it('REPORT-011: table can return weekly totals aggregated across all shops', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+
+    const upsertRes = await request(app)
+      .post('/api/store-reports/admin-weekly')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .send({
+        entries: [
+          {
+            report_type: 'weekly_financial',
+            store_name: fixtures.shops.mainShop.name,
+            year: 2026,
+            month: 4,
+            week_number: 16,
+            week_range_label: '22/04 to 28/04',
+            metrics: { sales: 1000, net: 700, income: 250 },
+          },
+          {
+            report_type: 'weekly_financial',
+            store_name: fixtures.shops.eastShop.name,
+            year: 2026,
+            month: 4,
+            week_number: 16,
+            week_range_label: '22/04 to 28/04',
+            metrics: { sales: 500, net: 350, income: 120 },
+          },
+        ],
+      });
+
+    expectEnvelope(upsertRes, 200);
+
+    const tableRes = await request(app)
+      .get('/api/store-reports/table')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({
+        view: 'admin_weekly',
+        report_type: 'weekly_financial',
+        year: 2026,
+        month: 4,
+        week_number: 16,
+        include_weekly_totals: true,
+      });
+
+    expectEnvelope(tableRes, 200);
+    expect(tableRes.body.data.count).toBe(2);
+    expect(tableRes.body.data.weekly_totals).toHaveLength(1);
+    expect(tableRes.body.data.weekly_totals[0].sales).toBe(1500);
+    expect(tableRes.body.data.weekly_totals[0].net).toBe(1050);
+    expect(tableRes.body.data.weekly_totals[0].income).toBe(370);
+    expect(tableRes.body.data.weekly_totals[0].shopCount).toBe(2);
+  });
+
+  it('REPORT-009: staff cannot access dashboard analytics endpoint', async () => {
+    const staffLogin = await login('staff@org.com', 'Staff@1234');
+
+    const analyticsRes = await request(app)
+      .get('/api/store-reports/analytics/dashboard')
+      .set('Authorization', `Bearer ${staffLogin.token}`)
+      .query({ report_type: 'weekly_financial' });
+
+    expectEnvelope(analyticsRes, 403);
+  });
 });

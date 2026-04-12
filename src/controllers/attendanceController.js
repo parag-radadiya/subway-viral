@@ -51,6 +51,18 @@ function toHours(minutes) {
   return Number((minutes / 60).toFixed(2));
 }
 
+function buildAttendanceMatch(filter) {
+  const match = { ...filter };
+
+  if (typeof match.user_id === 'string') match.user_id = toObjectIdIfValid(match.user_id);
+  if (typeof match.shop_id === 'string') match.shop_id = toObjectIdIfValid(match.shop_id);
+  if (match.shop_id?.$in) {
+    match.shop_id = { $in: match.shop_id.$in.map((id) => toObjectIdIfValid(String(id))) };
+  }
+
+  return match;
+}
+
 function subtractDays(dateValue, days) {
   const d = new Date(dateValue);
   d.setUTCDate(d.getUTCDate() - days);
@@ -950,6 +962,164 @@ const getAttendance = asyncHandler(async (req, res) => {
   });
 });
 
+// GET attendance by required date range with pagination + range totals
+// GET /api/attendance/range
+const getAttendanceByDateRange = asyncHandler(async (req, res) => {
+  await runAutoPunchOutSweep();
+  const roleName = String(req.user?.role_id?.role_name || '')
+    .trim()
+    .toLowerCase();
+  const isRootViewer = roleName === 'root';
+  const isAdminViewer = roleName === 'admin';
+
+  const fromDate = toUtcStartOfDay(req.query.from_date);
+  const toDate = toUtcEndOfDay(req.query.to_date);
+  if (!fromDate || !toDate) {
+    throw new AppError('from_date and to_date are required and must be valid ISO dates', 400);
+  }
+  if (toDate < fromDate) {
+    throw new AppError('to_date must be greater than or equal to from_date', 400);
+  }
+
+  const scope = buildReadScope(req.user);
+  const isGlobalViewer = scope.mode === 'all' || isAdminViewer;
+  const filter = {
+    is_active: { $ne: false },
+    punch_in: {
+      $gte: fromDate,
+      $lte: toDate,
+    },
+  };
+  const requestedShopId = req.query.shop_id ? String(req.query.shop_id) : null;
+  const { page, limit, skip, sort } = parsePagination(req.query, {
+    defaultSortBy: 'punch_in',
+    allowedSortBy: ['punch_in', 'punch_out', 'createdAt', 'updatedAt'],
+  });
+  let enforcedShopIds = null;
+
+  if (!isRootViewer && isGlobalViewer) {
+    const shopScope = buildShopScope(req.user);
+    enforcedShopIds = Array.isArray(shopScope.ids) ? shopScope.ids.map((id) => String(id)) : [];
+
+    if (!isAdminViewer && !requestedShopId && enforcedShopIds.length > 0) {
+      filter.shop_id = { $in: enforcedShopIds };
+    }
+  } else if (scope.mode === 'self') {
+    filter.user_id = req.user._id;
+  } else if (scope.mode === 'shops') {
+    if (!scope.shopScope.all && scope.shopScope.ids.length === 0) {
+      return sendSuccess(res, 'Attendance range records fetched successfully', {
+        ...toPageMeta(0, page, limit, 0),
+        from_date: fromDate.toISOString(),
+        to_date: toDate.toISOString(),
+        shop_id: requestedShopId,
+        total_work_hours: 0,
+        total_actual_hours: 0,
+        records: [],
+      });
+    }
+    if (!scope.shopScope.all) {
+      filter.shop_id = { $in: scope.shopScope.ids };
+    }
+  }
+
+  if (req.query.user_id && scope.mode !== 'self') filter.user_id = req.query.user_id;
+
+  if (requestedShopId) {
+    if (
+      !isAdminViewer &&
+      enforcedShopIds &&
+      enforcedShopIds.length > 0 &&
+      !enforcedShopIds.includes(requestedShopId)
+    ) {
+      return sendSuccess(res, 'Attendance range records fetched successfully', {
+        ...toPageMeta(0, page, limit, 0),
+        from_date: fromDate.toISOString(),
+        to_date: toDate.toISOString(),
+        shop_id: requestedShopId,
+        total_work_hours: 0,
+        total_actual_hours: 0,
+        records: [],
+      });
+    }
+    if (
+      scope.mode === 'shops' &&
+      !scope.shopScope.all &&
+      !isShopAllowed(scope.shopScope, requestedShopId)
+    ) {
+      return sendSuccess(res, 'Attendance range records fetched successfully', {
+        ...toPageMeta(0, page, limit, 0),
+        from_date: fromDate.toISOString(),
+        to_date: toDate.toISOString(),
+        shop_id: requestedShopId,
+        total_work_hours: 0,
+        total_actual_hours: 0,
+        records: [],
+      });
+    }
+    filter.shop_id = requestedShopId;
+  }
+
+  const match = buildAttendanceMatch(filter);
+  const actualMinutesExpr = {
+    $cond: [
+      { $and: [{ $ne: ['$punch_in', null] }, { $ne: ['$punch_out', null] }] },
+      { $divide: [{ $subtract: ['$punch_out', '$punch_in'] }, 60000] },
+      0,
+    ],
+  };
+  const workMinutesExpr = isRootViewer
+    ? actualMinutesExpr
+    : {
+        $ifNull: ['$effective_minutes', { $ifNull: ['$adjusted_minutes', actualMinutesExpr] }],
+      };
+
+  const [total, records, totalsAgg] = await Promise.all([
+    Attendance.countDocuments(filter),
+    Attendance.find(filter)
+      .populate('user_id', 'name email')
+      .populate('shop_id', 'name')
+      .populate('rota_id', 'shift_start shift_end shift_date start_time end_time note')
+      .populate('manual_by', 'name email')
+      .sort(sort)
+      .skip(skip)
+      .limit(limit),
+    Attendance.aggregate([
+      { $match: match },
+      {
+        $group: {
+          _id: null,
+          total_actual_minutes: { $sum: { $max: [0, actualMinutesExpr] } },
+          total_work_minutes: { $sum: { $max: [0, workMinutesExpr] } },
+        },
+      },
+    ]),
+  ]);
+
+  const totals = totalsAgg[0] || { total_actual_minutes: 0, total_work_minutes: 0 };
+
+  const visibleRecords = records.map((record) => {
+    if (isRootViewer) return record;
+
+    const dto = record.toObject();
+    if (record.effective_start && record.effective_end) {
+      dto.punch_in = record.effective_start;
+      dto.punch_out = record.effective_end;
+    }
+    return dto;
+  });
+
+  return sendSuccess(res, 'Attendance range records fetched successfully', {
+    ...toPageMeta(total, page, limit, visibleRecords.length),
+    from_date: fromDate.toISOString(),
+    to_date: toDate.toISOString(),
+    shop_id: requestedShopId,
+    total_work_hours: toHours(totals.total_work_minutes || 0),
+    total_actual_hours: toHours(totals.total_actual_minutes || 0),
+    records: visibleRecords,
+  });
+});
+
 // GET grouped attendance summary by user
 // GET /api/attendance/summary-by-user
 const getAttendanceSummaryByUser = asyncHandler(async (req, res) => {
@@ -1570,6 +1740,7 @@ module.exports = {
   punchOut,
   manualPunchIn,
   getAttendance,
+  getAttendanceByDateRange,
   getAttendanceSummaryByUser,
   getEligibleRotas,
   reconcileAllOverdue,

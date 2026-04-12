@@ -1120,4 +1120,60 @@ describe('Attendance module integration', () => {
     expect(managerSummary.total_work_hours).toBe(4);
     expect(managerSummary.total_actual_hours).toBe(4);
   });
+
+  it('ATT-036: attendance range API requires from_date and to_date', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+
+    const res = await request(app)
+      .get('/api/attendance/range')
+      .set('Authorization', `Bearer ${adminLogin.token}`);
+
+    expectEnvelope(res, 400);
+  });
+
+  it('ATT-037: attendance range API returns paginated records with full-range total_work_hours', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+
+    await Attendance.insertMany([
+      {
+        user_id: fixtures.users.staffUser._id,
+        shop_id: fixtures.shops.mainShop._id,
+        punch_in: new Date('2026-03-27T09:00:00.000Z'),
+        punch_out: new Date('2026-03-27T17:00:00.000Z'),
+        effective_start: new Date('2026-03-27T10:00:00.000Z'),
+        effective_end: new Date('2026-03-27T16:00:00.000Z'),
+        effective_minutes: 360,
+        effective_source: 'Adjusted',
+        punch_method: 'GPS+Biometric',
+      },
+      {
+        user_id: fixtures.users.staffUser._id,
+        shop_id: fixtures.shops.mainShop._id,
+        punch_in: new Date('2026-03-28T09:00:00.000Z'),
+        punch_out: new Date('2026-03-28T12:00:00.000Z'),
+        punch_method: 'GPS+Biometric',
+      },
+    ]);
+
+    const res = await request(app)
+      .get('/api/attendance/range')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({
+        from_date: '2026-03-27',
+        to_date: '2026-03-28',
+        page: 1,
+        limit: 1,
+        sort_by: 'punch_in',
+        sort_order: 'asc',
+      });
+
+    expectEnvelope(res, 200);
+    expect(res.body.data.total).toBe(2);
+    expect(res.body.data.count).toBe(1);
+    expect(res.body.data.total_work_hours).toBe(9);
+    expect(res.body.data.total_actual_hours).toBe(11);
+    expect(res.body.data.from_date).toBe('2026-03-27T00:00:00.000Z');
+    expect(res.body.data.to_date).toBe('2026-03-28T23:59:59.999Z');
+    expect(Array.isArray(res.body.data.records)).toBe(true);
+  });
 });

@@ -1185,6 +1185,63 @@
           }
         },
         {
+          "name": "Get Attendance by Date Range (Paginated + Totals)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', function () { pm.response.to.have.status(200); });",
+                  "const json = pm.response.json();",
+                  "pm.test('Response includes range totals', function () {",
+                  "  pm.expect(json.data).to.have.property('total_work_hours');",
+                  "  pm.expect(json.data).to.have.property('total_actual_hours');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/attendance/range?from_date={{from_date}}&to_date={{to_date}}&shop_id={{shop_id}}&page={{page}}&limit={{limit}}&sort_by=punch_in&sort_order=desc",
+              "host": ["{{base_url}}"],
+              "path": ["api", "attendance", "range"],
+              "query": [
+                {
+                  "key": "from_date",
+                  "value": "{{from_date}}"
+                },
+                {
+                  "key": "to_date",
+                  "value": "{{to_date}}"
+                },
+                {
+                  "key": "shop_id",
+                  "value": "{{shop_id}}"
+                },
+                {
+                  "key": "page",
+                  "value": "{{page}}"
+                },
+                {
+                  "key": "limit",
+                  "value": "{{limit}}"
+                },
+                {
+                  "key": "sort_by",
+                  "value": "punch_in"
+                },
+                {
+                  "key": "sort_order",
+                  "value": "desc"
+                }
+              ]
+            }
+          }
+        },
+        {
           "name": "Get Attendance Summary by User",
           "request": {
             "method": "GET",
@@ -1674,6 +1731,98 @@
                 {
                   "key": "limit",
                   "value": "{{limit}}"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "📊 Store Reports",
+      "item": [
+        {
+          "name": "Upsert Admin Weekly (Dynamic Metrics)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"entries\": [\n    {\n      \"report_type\": \"weekly_financial\",\n      \"store_name\": \"Main Shop\",\n      \"year\": 2026,\n      \"month\": 4,\n      \"week_number\": 15,\n      \"week_range_label\": \"05/04 to 11/04\",\n      \"metrics\": {\n        \"GROSS SALES\": 2000,\n        \"VAT\": 300,\n        \"NET SALES\": 1700,\n        \"Customer Count\": 100,\n        \"JustEat Sale\": 200,\n        \"UberEat Sale\": 200,\n        \"Deliveroo sale\": 200,\n        \"Total 3PD Sale\": 600,\n        \"income\": 400\n      }\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/store-reports/admin-weekly",
+              "host": ["{{base_url}}"],
+              "path": ["api", "store-reports", "admin-weekly"]
+            }
+          }
+        },
+        {
+          "name": "Get Store Report Table (Reconciled)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/store-reports/table?view=reconciled&report_type=weekly_financial&year=2026&month=4&week_number=15",
+              "host": ["{{base_url}}"],
+              "path": ["api", "store-reports", "table"],
+              "query": [
+                {
+                  "key": "view",
+                  "value": "reconciled"
+                },
+                {
+                  "key": "report_type",
+                  "value": "weekly_financial"
+                },
+                {
+                  "key": "year",
+                  "value": "2026"
+                },
+                {
+                  "key": "month",
+                  "value": "4"
+                },
+                {
+                  "key": "week_number",
+                  "value": "15"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Dashboard Analytics (WoW + YoY)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/store-reports/analytics/dashboard?view=reconciled&report_type=weekly_financial&from=2026-04-05&to=2026-04-11&compare=both",
+              "host": ["{{base_url}}"],
+              "path": ["api", "store-reports", "analytics", "dashboard"],
+              "query": [
+                {
+                  "key": "view",
+                  "value": "reconciled"
+                },
+                {
+                  "key": "report_type",
+                  "value": "weekly_financial"
+                },
+                {
+                  "key": "from",
+                  "value": "2026-04-05"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-04-11"
+                },
+                {
+                  "key": "compare",
+                  "value": "both"
                 }
               ]
             }

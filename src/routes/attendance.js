@@ -6,6 +6,7 @@ const {
   punchOut,
   manualPunchIn,
   getAttendance,
+  getAttendanceByDateRange,
   getAttendanceSummaryByUser,
   getEligibleRotas,
   reconcileAllOverdue,
@@ -374,6 +375,70 @@ router.put('/:id/punch-out', protect, punchOut);
  *         description: Grouped attendance summary by user
  */
 router.get('/summary-by-user', protect, getAttendanceSummaryByUser);
+
+/**
+ * @swagger
+ * /api/attendance/range:
+ *   get:
+ *     summary: List attendance by required date range with pagination and total hours summary
+ *     tags: [Attendance]
+ *     security:
+ *       - BearerAuth: []
+ *     description: |
+ *       Returns attendance records in the selected date range with pagination.
+ *       Also returns range-level `total_work_hours` and `total_actual_hours`.
+ *       `from_date` and `to_date` are required.
+ *     parameters:
+ *       - in: query
+ *         name: from_date
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: Start date (inclusive)
+ *       - in: query
+ *         name: to_date
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: End date (inclusive)
+ *       - in: query
+ *         name: shop_id
+ *         schema:
+ *           type: string
+ *         description: Optional shop filter (subject to role/shop scope)
+ *       - in: query
+ *         name: user_id
+ *         schema:
+ *           type: string
+ *         description: Optional user filter (ignored for self-scope users)
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: sort_by
+ *         schema:
+ *           type: string
+ *           enum: [punch_in, punch_out, createdAt, updatedAt]
+ *       - in: query
+ *         name: sort_order
+ *         schema:
+ *           type: string
+ *           enum: [asc, desc]
+ *     responses:
+ *       200:
+ *         description: Attendance range records fetched successfully
+ *       400:
+ *         description: Missing/invalid date range
+ */
+
+router.get('/range', protect, getAttendanceByDateRange);
 
 /**
  * @swagger
