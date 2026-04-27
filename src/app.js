@@ -23,10 +23,49 @@ const { requestAnalytics } = require('./middleware/requestAnalyticsMiddleware');
 
 const app = express();
 
+const normalizeOrigin = (value) => {
+  if (!value) return null;
+  const trimmed = String(value).trim().replace(/\/+$/, '');
+  if (!trimmed) return null;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return `https://${trimmed}`;
+};
+
+const configuredOrigins = [
+  ...(process.env.CORS_ALLOWED_ORIGINS || '').split(',').map(normalizeOrigin).filter(Boolean),
+  normalizeOrigin(process.env.VERCEL_URL),
+  'http://localhost:3000',
+  'http://localhost:5173',
+  'http://localhost:4173',
+  'http://127.0.0.1:3000',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:4173',
+].filter(Boolean);
+
+const allowedOrigins = new Set(configuredOrigins);
+
+const corsOptions = {
+  origin(origin, callback) {
+    // Non-browser requests (no Origin header) should still be allowed.
+    if (!origin) return callback(null, true);
+
+    if (allowedOrigins.size === 0 || allowedOrigins.has(normalizeOrigin(origin))) {
+      return callback(null, true);
+    }
+
+    return callback(new Error(`CORS blocked for origin: ${origin}`));
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-device-id'],
+  optionsSuccessStatus: 200,
+};
+
 // Security & parsing middleware
 // contentSecurityPolicy disabled — Swagger UI uses inline scripts that CSP blocks
 app.use(helmet({ contentSecurityPolicy: false }));
-app.use(cors());
+app.use(cors(corsOptions));
+app.options(/.*/, cors(corsOptions));
 app.use(express.json());
 app.use(requestAnalytics);
 
