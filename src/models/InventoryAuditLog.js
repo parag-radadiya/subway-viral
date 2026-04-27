@@ -5,13 +5,7 @@ const inventoryAuditLogSchema = new mongoose.Schema(
     action: {
       type: String,
       required: true,
-      enum: [
-        'ITEM_CREATED',
-        'ITEM_UPDATED',
-        'ITEM_DELETED',
-        'QUERY_OPENED',
-        'QUERY_CLOSED',
-      ],
+      enum: ['ITEM_CREATED', 'ITEM_UPDATED', 'ITEM_DELETED', 'QUERY_OPENED', 'QUERY_CLOSED'],
     },
     performed_by: {
       type: mongoose.Schema.Types.ObjectId,
@@ -53,4 +47,3 @@ inventoryAuditLogSchema.index({ shop_id: 1, createdAt: -1 }, { name: 'idx_audit_
 inventoryAuditLogSchema.index({ action: 1, createdAt: -1 }, { name: 'idx_audit_action_created' });
 
 module.exports = mongoose.model('InventoryAuditLog', inventoryAuditLogSchema);
-

@@ -61,7 +61,7 @@
     ],
     "*.js": [
       "eslint --fix",
-      "jest --bail --findRelatedTests --passWithNoTests"
+      "jest --runInBand --bail --findRelatedTests --passWithNoTests"
     ]
   }
 }

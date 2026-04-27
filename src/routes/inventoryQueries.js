@@ -1,7 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const {
-  getQueries, getQuery, createQuery, closeQuery,
+  getQueries,
+  getQuery,
+  createQuery,
+  closeQuery,
 } = require('../controllers/inventoryQueryController');
 const { protect } = require('../middleware/authMiddleware');
 const { requirePermission } = require('../middleware/permMiddleware');

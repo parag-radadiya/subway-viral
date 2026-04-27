@@ -28,4 +28,3 @@ module.exports = {
   clearSandboxDb,
   disconnectSandboxDb,
 };
-

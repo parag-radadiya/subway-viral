@@ -130,7 +130,8 @@ const options = {
             closing_time: {
               type: 'string',
               example: '05:00',
-              description: 'HH:MM (24h). If earlier than opening_time, it is treated as next-day closing.',
+              description:
+                'HH:MM (24h). If earlier than opening_time, it is treated as next-day closing.',
             },
             min_shift_duration_hours: { type: 'number', example: 2, default: 2 },
             max_shift_duration_hours: { type: 'number', example: 8, default: 8 },

@@ -30,4 +30,3 @@ const requestAnalytics = (req, res, next) => {
 };
 
 module.exports = { requestAnalytics };
-

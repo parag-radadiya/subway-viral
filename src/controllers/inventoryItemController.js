@@ -71,11 +71,7 @@ const getItems = asyncHandler(async (req, res) => {
 
   const [total, items] = await Promise.all([
     InventoryItem.countDocuments(filter),
-    InventoryItem.find(filter)
-      .populate('shop_id', 'name')
-      .sort(sort)
-      .skip(skip)
-      .limit(limit),
+    InventoryItem.find(filter).populate('shop_id', 'name').sort(sort).skip(skip).limit(limit),
   ]);
 
   return sendSuccess(res, 'Inventory items fetched successfully', {
@@ -129,7 +125,8 @@ const updateItem = asyncHandler(async (req, res) => {
   const beforeState = existing.toObject();
 
   const item = await InventoryItem.findByIdAndUpdate(req.params.id, req.body, {
-    new: true, runValidators: true,
+    new: true,
+    runValidators: true,
   });
   if (!item) throw new AppError('Item not found', 404);
 

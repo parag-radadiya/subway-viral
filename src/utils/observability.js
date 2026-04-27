@@ -49,7 +49,7 @@ const recordErrorLog = ({ req, statusCode, message, stack, meta = {} }) =>
     const forwardedFor = req?.headers?.['x-forwarded-for'];
     const ip = Array.isArray(forwardedFor)
       ? forwardedFor[0]
-      : (forwardedFor || req?.ip || req?.socket?.remoteAddress || null);
+      : forwardedFor || req?.ip || req?.socket?.remoteAddress || null;
 
     await ErrorLog.create({
       status_code: statusCode,
@@ -68,6 +68,3 @@ module.exports = {
   recordRequestMetric,
   recordErrorLog,
 };
-
-
-

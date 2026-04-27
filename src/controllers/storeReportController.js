@@ -2543,7 +2543,14 @@ const getWeekly2026 = asyncHandler(async (req, res) => {
       return sendSuccess(res, 'Weekly 2026 records fetched', {
         rows: [],
         count: 0,
-        pagination: { enabled: true, basis: 'row', ...pageMeta, page_count: pageMeta.total_pages, has_next: false, has_prev: false },
+        pagination: {
+          enabled: true,
+          basis: 'row',
+          ...pageMeta,
+          page_count: pageMeta.total_pages,
+          has_next: false,
+          has_prev: false,
+        },
       });
     }
     filter.shop_id = req.query.shop_id;
@@ -2553,7 +2560,14 @@ const getWeekly2026 = asyncHandler(async (req, res) => {
       return sendSuccess(res, 'Weekly 2026 records fetched', {
         rows: [],
         count: 0,
-        pagination: { enabled: true, basis: 'row', ...pageMeta, page_count: pageMeta.total_pages, has_next: false, has_prev: false },
+        pagination: {
+          enabled: true,
+          basis: 'row',
+          ...pageMeta,
+          page_count: pageMeta.total_pages,
+          has_next: false,
+          has_prev: false,
+        },
       });
     }
     filter.shop_id = { $in: shopScope.ids };
@@ -2682,7 +2696,14 @@ const getMonthlySale2026 = asyncHandler(async (req, res) => {
       return sendSuccess(res, 'Monthly Sale 2026 records fetched', {
         rows: [],
         count: 0,
-        pagination: { enabled: true, basis: 'row', ...pageMeta, page_count: pageMeta.total_pages, has_next: false, has_prev: false },
+        pagination: {
+          enabled: true,
+          basis: 'row',
+          ...pageMeta,
+          page_count: pageMeta.total_pages,
+          has_next: false,
+          has_prev: false,
+        },
       });
     }
     filter.shop_id = req.query.shop_id;
@@ -2692,7 +2713,14 @@ const getMonthlySale2026 = asyncHandler(async (req, res) => {
       return sendSuccess(res, 'Monthly Sale 2026 records fetched', {
         rows: [],
         count: 0,
-        pagination: { enabled: true, basis: 'row', ...pageMeta, page_count: pageMeta.total_pages, has_next: false, has_prev: false },
+        pagination: {
+          enabled: true,
+          basis: 'row',
+          ...pageMeta,
+          page_count: pageMeta.total_pages,
+          has_next: false,
+          has_prev: false,
+        },
       });
     }
     filter.shop_id = { $in: shopScope.ids };
@@ -2727,14 +2755,7 @@ const getMonthlySale2026 = asyncHandler(async (req, res) => {
 });
 
 const upsertSingleMonthlySale2026 = asyncHandler(async (req, res) => {
-  const {
-    store_name,
-    shop_id: inputShopId,
-    year,
-    month,
-    metrics,
-    source_sheet,
-  } = req.body;
+  const { store_name, shop_id: inputShopId, year, month, metrics, source_sheet } = req.body;
 
   if (!year || !month) {
     throw new AppError('year and month are required', 400);
@@ -2789,8 +2810,19 @@ const upsertSingleMonthlySale2026 = asyncHandler(async (req, res) => {
 // ---------- Excel Export ----------
 
 const MONTH_NAMES = [
-  '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  '',
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
 ];
 
 const exportExcel = asyncHandler(async (req, res) => {
@@ -2844,11 +2876,7 @@ const exportExcel = asyncHandler(async (req, res) => {
       const rows = [header];
 
       weeklyRecords.forEach((r) => {
-        const row = [
-          r.week_number,
-          r.week_range_label || '',
-          r.store_name_raw || '',
-        ];
+        const row = [r.week_number, r.week_range_label || '', r.store_name_raw || ''];
         metricCols.forEach((key) => {
           row.push(r.metrics?.[key] ?? '');
         });
@@ -2890,10 +2918,7 @@ const exportExcel = asyncHandler(async (req, res) => {
           lastMonthLabel = monthLabel;
         }
 
-        const row = [
-          '',
-          r.store_name_raw || '',
-        ];
+        const row = ['', r.store_name_raw || ''];
         metricCols.forEach((key) => {
           row.push(r.metrics?.[key] ?? '');
         });
@@ -2917,7 +2942,10 @@ const exportExcel = asyncHandler(async (req, res) => {
   const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
 
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader(
+    'Content-Type',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  );
   res.setHeader('Content-Length', buffer.length);
   return res.send(buffer);
 });

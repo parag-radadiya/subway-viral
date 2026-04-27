@@ -125,7 +125,7 @@ const createQuery = asyncHandler(async (req, res) => {
   const { item_id, shop_id, issue_note } = req.body;
   const scope = buildInventoryScope(req.user);
 
-    // Verify item exists
+  // Verify item exists
   const item = await InventoryItem.findById(item_id);
   if (!item) throw new AppError('Inventory item not found', 404);
   assertShopAllowed(scope, item.shop_id);
@@ -134,44 +134,44 @@ const createQuery = asyncHandler(async (req, res) => {
     throw new AppError('shop_id must match the item shop', 400);
   }
 
-      // Create the query (ticket)
+  // Create the query (ticket)
   const effectiveShopId = shop_id || item.shop_id;
   assertShopAllowed(scope, effectiveShopId);
 
-      const existingOpenQuery = await InventoryQuery.findOne({ item_id, status: 'Open' }).select('_id');
-      if (existingOpenQuery) {
-        throw new AppError('An open inventory query already exists for this item', 409);
-      }
+  const existingOpenQuery = await InventoryQuery.findOne({ item_id, status: 'Open' }).select('_id');
+  if (existingOpenQuery) {
+    throw new AppError('An open inventory query already exists for this item', 409);
+  }
 
-      // ── Auto-sync: set item status to 'Damaged' ──
+  // ── Auto-sync: set item status to 'Damaged' ──
   item.status = 'Damaged';
   await item.save();
 
-      let query;
-      try {
-        query = await InventoryQuery.create({
-          item_id,
-          shop_id: effectiveShopId,
-          reported_by: req.user._id,
-          issue_note,
-          status: 'Open',
-        });
-      } catch (err) {
-        if (err?.code === 11000) {
-          throw new AppError('An open inventory query already exists for this item', 409);
-        }
-        throw err;
-      }
+  let query;
+  try {
+    query = await InventoryQuery.create({
+      item_id,
+      shop_id: effectiveShopId,
+      reported_by: req.user._id,
+      issue_note,
+      status: 'Open',
+    });
+  } catch (err) {
+    if (err?.code === 11000) {
+      throw new AppError('An open inventory query already exists for this item', 409);
+    }
+    throw err;
+  }
 
-          await recordInventoryAudit({
-            action: 'QUERY_OPENED',
-            performedBy: req.user._id,
-            shopId: effectiveShopId,
-            itemId: item._id,
-            queryId: query._id,
-            beforeState: null,
-            afterState: query,
-          });
+  await recordInventoryAudit({
+    action: 'QUERY_OPENED',
+    performedBy: req.user._id,
+    shopId: effectiveShopId,
+    itemId: item._id,
+    queryId: query._id,
+    beforeState: null,
+    afterState: query,
+  });
 
   const populated = await query.populate([
     { path: 'item_id', select: 'item_name status' },
@@ -179,9 +179,14 @@ const createQuery = asyncHandler(async (req, res) => {
     { path: 'reported_by', select: 'name email' },
   ]);
 
-  return sendSuccess(res, 'Query opened and item marked as Damaged', {
-    query: populated,
-  }, 201);
+  return sendSuccess(
+    res,
+    'Query opened and item marked as Damaged',
+    {
+      query: populated,
+    },
+    201
+  );
 });
 
 // PUT /api/inventory/queries/:id/close
@@ -214,24 +219,27 @@ const closeQuery = asyncHandler(async (req, res) => {
     throw new AppError('Query is already closed', 409);
   }
 
-      // Keep item Damaged while any open query remains for this item.
-      const remainingOpenCount = await InventoryQuery.countDocuments({
-        item_id: query.item_id,
-        status: 'Open',
-      });
-      const nextItemStatus = remainingOpenCount > 0 ? 'Damaged' : 'Good';
-      await InventoryItem.findByIdAndUpdate(query.item_id, { status: nextItemStatus });
+  // Keep item Damaged while any open query remains for this item.
+  const remainingOpenCount = await InventoryQuery.countDocuments({
+    item_id: query.item_id,
+    status: 'Open',
+  });
+  const nextItemStatus = remainingOpenCount > 0 ? 'Damaged' : 'Good';
+  await InventoryItem.findByIdAndUpdate(query.item_id, { status: nextItemStatus });
 
-          await recordInventoryAudit({
-            action: 'QUERY_CLOSED',
-            performedBy: req.user._id,
-            shopId: query.shop_id,
-            itemId: query.item_id,
-            queryId: query._id,
-            beforeState,
-            afterState: query,
-            metadata: { item_status_after_close: nextItemStatus, remaining_open_queries: remainingOpenCount },
-          });
+  await recordInventoryAudit({
+    action: 'QUERY_CLOSED',
+    performedBy: req.user._id,
+    shopId: query.shop_id,
+    itemId: query.item_id,
+    queryId: query._id,
+    beforeState,
+    afterState: query,
+    metadata: {
+      item_status_after_close: nextItemStatus,
+      remaining_open_queries: remainingOpenCount,
+    },
+  });
 
   const populated = await query.populate([
     { path: 'item_id', select: 'item_name status' },

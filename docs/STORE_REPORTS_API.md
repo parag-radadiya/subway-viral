@@ -8,22 +8,22 @@
 
 ## Table of Contents
 
-| # | Method | Endpoint | Permission | Description |
-|---|--------|----------|------------|-------------|
-| 1 | POST | `/import-excel` | `can_manage_rotas` | Import weekly data from Excel file |
-| 2 | POST | `/import-historical-workbook` | `can_manage_rotas` | Bulk import historical workbook (3 sheets) |
-| 3 | POST | `/admin-weekly` | `can_manage_rotas` | Upsert admin weekly report entries |
-| 4 | GET | `/table` | `can_view_all_staff` | Paginated report table (excel_raw, admin_weekly, reconciled) |
-| 5 | GET | `/analytics/summary` | `can_view_all_staff` | KPI summary with WoW/YoY comparison |
-| 6 | GET | `/analytics/store-ranking` | `can_view_all_staff` | Store ranking by selected metric |
-| 7 | GET | `/analytics/trends` | `can_view_all_staff` | Trend data (total + by-shop series) |
-| 8 | GET | `/analytics/charts/sales` | `can_view_all_staff` | Sales chart data |
-| 9 | GET | `/analytics/dashboard` | `can_view_all_staff` | Full dashboard analytics |
-| 10 | GET | `/weekly` | `can_view_all_staff` | Get Weekly records |
-| 11 | POST | `/weekly` | `can_manage_rotas` | Add/update single Weekly entry |
-| 12 | GET | `/monthly-sale` | `can_view_all_staff` | Get Monthly Sale records |
-| 13 | POST | `/monthly-sale` | `can_manage_rotas` | Add/update single Monthly Sale entry |
-| 14 | GET | `/export` | `can_view_all_staff` | Export filtered database records to Excel (`.xlsx`) |
+| #   | Method | Endpoint                      | Permission           | Description                                                  |
+| --- | ------ | ----------------------------- | -------------------- | ------------------------------------------------------------ |
+| 1   | POST   | `/import-excel`               | `can_manage_rotas`   | Import weekly data from Excel file                           |
+| 2   | POST   | `/import-historical-workbook` | `can_manage_rotas`   | Bulk import historical workbook (3 sheets)                   |
+| 3   | POST   | `/admin-weekly`               | `can_manage_rotas`   | Upsert admin weekly report entries                           |
+| 4   | GET    | `/table`                      | `can_view_all_staff` | Paginated report table (excel_raw, admin_weekly, reconciled) |
+| 5   | GET    | `/analytics/summary`          | `can_view_all_staff` | KPI summary with WoW/YoY comparison                          |
+| 6   | GET    | `/analytics/store-ranking`    | `can_view_all_staff` | Store ranking by selected metric                             |
+| 7   | GET    | `/analytics/trends`           | `can_view_all_staff` | Trend data (total + by-shop series)                          |
+| 8   | GET    | `/analytics/charts/sales`     | `can_view_all_staff` | Sales chart data                                             |
+| 9   | GET    | `/analytics/dashboard`        | `can_view_all_staff` | Full dashboard analytics                                     |
+| 10  | GET    | `/weekly`                     | `can_view_all_staff` | Get Weekly records                                           |
+| 11  | POST   | `/weekly`                     | `can_manage_rotas`   | Add/update single Weekly entry                               |
+| 12  | GET    | `/monthly-sale`               | `can_view_all_staff` | Get Monthly Sale records                                     |
+| 13  | POST   | `/monthly-sale`               | `can_manage_rotas`   | Add/update single Monthly Sale entry                         |
+| 14  | GET    | `/export`                     | `can_view_all_staff` | Export filtered database records to Excel (`.xlsx`)          |
 
 ---
 
@@ -41,6 +41,7 @@ curl -X POST http://localhost:5000/api/store-reports/import-excel \
 ```
 
 **Example Response:**
+
 ```json
 {
   "status": 200,
@@ -58,7 +59,7 @@ curl -X POST http://localhost:5000/api/store-reports/import-excel \
 
 ## 2. Import Historical Workbook
 
-Bulk import from a workbook containing 3 sheets:  `Jan-Dec 26`, `Weekly 2026`, `Monthly Sale 2026`.
+Bulk import from a workbook containing 3 sheets: `Jan-Dec 26`, `Weekly 2026`, `Monthly Sale 2026`.
 
 > **Auto-creates shops** for unmatched store names with default values.
 
@@ -72,6 +73,7 @@ curl -X POST http://localhost:5000/api/store-reports/import-historical-workbook 
 ```
 
 **Example Response:**
+
 ```json
 {
   "status": 200,
@@ -158,16 +160,16 @@ curl "http://localhost:5000/api/store-reports/table?page=1&limit=20" \
 
 **Query Parameters:**
 
-| Param | Type | Description |
-|-------|------|-------------|
-| `view` | string | `excel_raw`, `admin_weekly`, `reconciled`, `all` (default: `reconciled`) |
-| `year` | number | Filter by year |
-| `month` | number | Filter by month (1-12) |
-| `week_number` | number | Filter by week number |
-| `shop_id` | ObjectId | Filter by specific shop |
-| `group_by` | string | `month` — aggregates weekly data into monthly rows |
-| `page` | number | Page number (default: 1) |
-| `limit` | number | Records per page (default: 20) |
+| Param         | Type     | Description                                                              |
+| ------------- | -------- | ------------------------------------------------------------------------ |
+| `view`        | string   | `excel_raw`, `admin_weekly`, `reconciled`, `all` (default: `reconciled`) |
+| `year`        | number   | Filter by year                                                           |
+| `month`       | number   | Filter by month (1-12)                                                   |
+| `week_number` | number   | Filter by week number                                                    |
+| `shop_id`     | ObjectId | Filter by specific shop                                                  |
+| `group_by`    | string   | `month` — aggregates weekly data into monthly rows                       |
+| `page`        | number   | Page number (default: 1)                                                 |
+| `limit`       | number   | Records per page (default: 20)                                           |
 
 ---
 
@@ -258,17 +260,18 @@ curl "http://localhost:5000/api/store-reports/weekly?year=2026&page=2&limit=10" 
 
 **Query Parameters:**
 
-| Param | Type | Description |
-|-------|------|-------------|
-| `year` | number | Filter by year |
-| `month` | number | Filter by month (1-12) |
-| `week_number` | number | Filter by week (1-53) |
-| `shop_id` | ObjectId | Filter by shop |
-| `store_key` | string | Filter by normalized store name |
-| `page` | number | Page number (default: 1) |
-| `limit` | number | Records per page (default: 20) |
+| Param         | Type     | Description                     |
+| ------------- | -------- | ------------------------------- |
+| `year`        | number   | Filter by year                  |
+| `month`       | number   | Filter by month (1-12)          |
+| `week_number` | number   | Filter by week (1-53)           |
+| `shop_id`     | ObjectId | Filter by shop                  |
+| `store_key`   | string   | Filter by normalized store name |
+| `page`        | number   | Page number (default: 1)        |
+| `limit`       | number   | Records per page (default: 20)  |
 
 **Example Response:**
+
 ```json
 {
   "status": 200,
@@ -333,6 +336,7 @@ curl -X POST http://localhost:5000/api/store-reports/weekly \
 ```
 
 **Using shop_id instead of store_name:**
+
 ```bash
 curl -X POST http://localhost:5000/api/store-reports/weekly \
   -H "Authorization: Bearer YOUR_TOKEN" \
@@ -351,16 +355,16 @@ curl -X POST http://localhost:5000/api/store-reports/weekly \
 
 **Required Fields:**
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `store_name` | string | Yes* | Store name (auto-creates shop if new) |
-| `shop_id` | ObjectId | Yes* | Or provide shop_id directly |
-| `year` | number | Yes | Year (e.g., 2026) |
-| `month` | number | Yes | Month (1-12) |
-| `week_number` | number | Yes | Week of the year (1-53) |
-| `metrics` | object | Yes | Key-value pairs of metric data |
-| `week_range_label` | string | No | e.g., "02/03 to 08/03" |
-| `source_sheet` | string | No | Defaults to "Weekly 2026" |
+| Field              | Type     | Required | Description                           |
+| ------------------ | -------- | -------- | ------------------------------------- |
+| `store_name`       | string   | Yes\*    | Store name (auto-creates shop if new) |
+| `shop_id`          | ObjectId | Yes\*    | Or provide shop_id directly           |
+| `year`             | number   | Yes      | Year (e.g., 2026)                     |
+| `month`            | number   | Yes      | Month (1-12)                          |
+| `week_number`      | number   | Yes      | Week of the year (1-53)               |
+| `metrics`          | object   | Yes      | Key-value pairs of metric data        |
+| `week_range_label` | string   | No       | e.g., "02/03 to 08/03"                |
+| `source_sheet`     | string   | No       | Defaults to "Weekly 2026"             |
 
 > \* Either `store_name` or `shop_id` is required.
 
@@ -390,16 +394,17 @@ curl "http://localhost:5000/api/store-reports/monthly-sale?year=2026&page=1&limi
 
 **Query Parameters:**
 
-| Param | Type | Description |
-|-------|------|-------------|
-| `year` | number | Filter by year |
-| `month` | number | Filter by month (1-12) |
-| `shop_id` | ObjectId | Filter by shop |
-| `store_key` | string | Filter by normalized store name |
-| `page` | number | Page number (default: 1) |
-| `limit` | number | Records per page (default: 20) |
+| Param       | Type     | Description                     |
+| ----------- | -------- | ------------------------------- |
+| `year`      | number   | Filter by year                  |
+| `month`     | number   | Filter by month (1-12)          |
+| `shop_id`   | ObjectId | Filter by shop                  |
+| `store_key` | string   | Filter by normalized store name |
+| `page`      | number   | Page number (default: 1)        |
+| `limit`     | number   | Records per page (default: 20)  |
 
 **Example Response:**
+
 ```json
 {
   "status": 200,
@@ -464,14 +469,14 @@ curl -X POST http://localhost:5000/api/store-reports/monthly-sale \
 
 **Required Fields:**
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `store_name` | string | Yes* | Store name (auto-creates shop if new) |
-| `shop_id` | ObjectId | Yes* | Or provide shop_id directly |
-| `year` | number | Yes | Year (e.g., 2026) |
-| `month` | number | Yes | Month (1-12) |
-| `metrics` | object | Yes | Key-value pairs of metric data |
-| `source_sheet` | string | No | Defaults to "Monthly Sale 2026" |
+| Field          | Type     | Required | Description                           |
+| -------------- | -------- | -------- | ------------------------------------- |
+| `store_name`   | string   | Yes\*    | Store name (auto-creates shop if new) |
+| `shop_id`      | ObjectId | Yes\*    | Or provide shop_id directly           |
+| `year`         | number   | Yes      | Year (e.g., 2026)                     |
+| `month`        | number   | Yes      | Month (1-12)                          |
+| `metrics`      | object   | Yes      | Key-value pairs of metric data        |
+| `source_sheet` | string   | No       | Defaults to "Monthly Sale 2026"       |
 
 > \* Either `store_name` or `shop_id` is required.
 
@@ -509,15 +514,16 @@ curl -o monthly_only.xlsx "http://localhost:5000/api/store-reports/export?sheets
 
 **Query Parameters:**
 
-| Param | Type | Description | Example |
-|-------|------|-------------|---------|
-| `year` | number | Filter completely by year | `?year=2026` |
-| `month` | number | Filter by month (1-12) | `?month=3` |
-| `shop_id` | ObjectId | Filter by specific shop | `?shop_id=663f1a2b3c4d...` |
-| `store_key` | string | Filter by normalized store name | `?store_key=baker st` |
-| `sheets` | string | Comma-separated sheets to include (`weekly`, `monthly`) | `?sheets=weekly,monthly` |
+| Param       | Type     | Description                                             | Example                    |
+| ----------- | -------- | ------------------------------------------------------- | -------------------------- |
+| `year`      | number   | Filter completely by year                               | `?year=2026`               |
+| `month`     | number   | Filter by month (1-12)                                  | `?month=3`                 |
+| `shop_id`   | ObjectId | Filter by specific shop                                 | `?shop_id=663f1a2b3c4d...` |
+| `store_key` | string   | Filter by normalized store name                         | `?store_key=baker st`      |
+| `sheets`    | string   | Comma-separated sheets to include (`weekly`, `monthly`) | `?sheets=weekly,monthly`   |
 
 **Response Details:**
+
 - **Status:** 200 OK
 - **Headers:** `Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`
 - **Body:** Binary Buffer of the `.xlsx` file.

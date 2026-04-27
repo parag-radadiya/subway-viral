@@ -162,5 +162,3 @@ After login, gate module by:
 - `permissions.can_manage_inventory`
 
 Then for role-scoped users (manager/sub-manager), show normal screens but expect data limited by assigned shop scope from backend.
-
-

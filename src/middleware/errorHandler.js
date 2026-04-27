@@ -54,4 +54,3 @@ module.exports = {
   notFoundHandler,
   globalErrorHandler,
 };
-

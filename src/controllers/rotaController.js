@@ -146,8 +146,10 @@ async function fetchShopShiftDurationCaps(shopId) {
 
   const rawMin = Number(shop.min_shift_duration_hours);
   const rawMax = Number(shop.max_shift_duration_hours);
-  const minHours = Number.isFinite(rawMin) && rawMin > 0 ? rawMin : DEFAULT_MIN_SHIFT_DURATION_HOURS;
-  const maxHours = Number.isFinite(rawMax) && rawMax > 0 ? rawMax : DEFAULT_MAX_SHIFT_DURATION_HOURS;
+  const minHours =
+    Number.isFinite(rawMin) && rawMin > 0 ? rawMin : DEFAULT_MIN_SHIFT_DURATION_HOURS;
+  const maxHours =
+    Number.isFinite(rawMax) && rawMax > 0 ? rawMax : DEFAULT_MAX_SHIFT_DURATION_HOURS;
 
   return {
     minHours,

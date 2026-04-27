@@ -59,4 +59,3 @@ router.use(protect, requirePermission('can_manage_inventory'));
 router.get('/', getAuditLogs);
 
 module.exports = router;
-

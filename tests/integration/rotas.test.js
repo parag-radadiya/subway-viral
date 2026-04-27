@@ -6,11 +6,7 @@ const { seedTestData } = require('../helpers/seedTestData');
 const Rota = require('../../src/models/Rota');
 const Shop = require('../../src/models/Shop');
 const User = require('../../src/models/User');
-const {
-  connectSandboxDb,
-  clearSandboxDb,
-  disconnectSandboxDb,
-} = require('../setup/testDb');
+const { connectSandboxDb, clearSandboxDb, disconnectSandboxDb } = require('../setup/testDb');
 
 describe('Rota module integration', () => {
   let fixtures;
@@ -194,11 +190,13 @@ describe('Rota module integration', () => {
         shop_id: fixtures.shops.mainShop._id.toString(),
         week_start: '2026-03-24',
         days: [0],
-        assignments: [{
-          user_id: fixtures.users.staffUser._id.toString(),
-          start_time: '09:30',
-          end_time: '17:30',
-        }],
+        assignments: [
+          {
+            user_id: fixtures.users.staffUser._id.toString(),
+            start_time: '09:30',
+            end_time: '17:30',
+          },
+        ],
       });
     expectEnvelope(firstRes, 201);
 
@@ -209,11 +207,13 @@ describe('Rota module integration', () => {
         shop_id: fixtures.shops.mainShop._id.toString(),
         week_start: '2026-03-24',
         days: [0],
-        assignments: [{
-          user_id: fixtures.users.staffUser._id.toString(),
-          start_time: '09:30',
-          end_time: '17:30',
-        }],
+        assignments: [
+          {
+            user_id: fixtures.users.staffUser._id.toString(),
+            start_time: '09:30',
+            end_time: '17:30',
+          },
+        ],
       });
 
     expectEnvelope(duplicateRes, 201);
@@ -290,7 +290,9 @@ describe('Rota module integration', () => {
       .set('Authorization', `Bearer ${managerLogin.token}`);
 
     expectEnvelope(listRes, 200);
-    expect(listRes.body.data.rotas.some((rota) => rota.shop_id._id === remoteShop._id.toString())).toBe(false);
+    expect(
+      listRes.body.data.rotas.some((rota) => rota.shop_id._id === remoteShop._id.toString())
+    ).toBe(false);
 
     const weekRes = await request(app)
       .get(`/api/rotas/week?week_start=2026-03-16&shop_id=${remoteShop._id}`)
@@ -576,5 +578,3 @@ describe('Rota module integration', () => {
     expect(res.body.data.skipped).toBe(0);
   });
 });
-
-

@@ -233,4 +233,3 @@ export type HistoricalImportResponse = {
 - Workbook contains required sheet names
 - UI displays imported/updated/failed counts
 - UI surfaces row-level `errors`
-

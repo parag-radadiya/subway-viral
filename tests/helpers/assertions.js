@@ -10,4 +10,3 @@ const expectEnvelope = (response, expectedStatus) => {
 };
 
 module.exports = { expectEnvelope };
-

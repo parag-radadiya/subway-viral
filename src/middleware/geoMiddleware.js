@@ -33,18 +33,15 @@ const validateGeofence = async (req, res, next) => {
       return next(new AppError('Shop not found', 404));
     }
 
-    const distance = haversineDistance(
-      latitude,
-      longitude,
-      shop.latitude,
-      shop.longitude
-    );
+    const distance = haversineDistance(latitude, longitude, shop.latitude, shop.longitude);
 
     if (distance > shop.geofence_radius_m) {
-      return next(new AppError(
-        `You are ${Math.round(distance)}m away. Must be within ${shop.geofence_radius_m}m of ${shop.name}.`,
-        403
-      ));
+      return next(
+        new AppError(
+          `You are ${Math.round(distance)}m away. Must be within ${shop.geofence_radius_m}m of ${shop.name}.`,
+          403
+        )
+      );
     }
 
     req.shop = shop;

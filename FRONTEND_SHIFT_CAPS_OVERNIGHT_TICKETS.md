@@ -1,6 +1,7 @@
 # Frontend Change Tickets: Shift Caps + Overnight Hours
 
 This document lists frontend changes required after backend updates for:
+
 - per-shop shift duration limits (`min_shift_duration_hours`, `max_shift_duration_hours`)
 - overnight shop operating hours (`closing_time` can be next day)
 
@@ -209,4 +210,3 @@ Map these responses to actionable UI:
 - Prefer client-side pre-validation for better UX, but never remove API error handling.
 - Reuse a shared duration utility for single rota and bulk rota forms.
 - Add analytics events for cap-validation failures to monitor adoption issues.
-

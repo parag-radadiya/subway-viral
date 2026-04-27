@@ -87,15 +87,9 @@ rotaSchema.pre('validate', function () {
 });
 
 // Unique per user+shift_start — allows split shifts but avoids duplicates.
-rotaSchema.index(
-  { user_id: 1, shift_start: 1 },
-  { unique: true, name: 'unique_user_shiftstart' }
-);
+rotaSchema.index({ user_id: 1, shift_start: 1 }, { unique: true, name: 'unique_user_shiftstart' });
 
 // Helps overlap checks (user + time window queries).
-rotaSchema.index(
-  { user_id: 1, shift_start: 1, shift_end: 1 },
-  { name: 'idx_user_shift_window' }
-);
+rotaSchema.index({ user_id: 1, shift_start: 1, shift_end: 1 }, { name: 'idx_user_shift_window' });
 
 module.exports = mongoose.model('Rota', rotaSchema);

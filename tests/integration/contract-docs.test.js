@@ -3,11 +3,7 @@ const app = require('../../src/app');
 const { expectEnvelope } = require('../helpers/assertions');
 const { login } = require('../helpers/auth');
 const { seedTestData } = require('../helpers/seedTestData');
-const {
-  connectSandboxDb,
-  clearSandboxDb,
-  disconnectSandboxDb,
-} = require('../setup/testDb');
+const { connectSandboxDb, clearSandboxDb, disconnectSandboxDb } = require('../setup/testDb');
 
 describe('Contract and documentation checks', () => {
   beforeAll(async () => {
@@ -62,4 +58,3 @@ describe('Contract and documentation checks', () => {
     expect(Array.isArray(res.body.data.shops)).toBe(true);
   });
 });
-

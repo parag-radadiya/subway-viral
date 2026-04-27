@@ -3,11 +3,7 @@ const app = require('../../src/app');
 const { expectEnvelope } = require('../helpers/assertions');
 const { login } = require('../helpers/auth');
 const { seedTestData } = require('../helpers/seedTestData');
-const {
-  connectSandboxDb,
-  clearSandboxDb,
-  disconnectSandboxDb,
-} = require('../setup/testDb');
+const { connectSandboxDb, clearSandboxDb, disconnectSandboxDb } = require('../setup/testDb');
 
 describe('Roles module integration', () => {
   beforeAll(async () => {
@@ -89,4 +85,3 @@ describe('Roles module integration', () => {
     expectEnvelope(deleteRes, 404);
   });
 });
-

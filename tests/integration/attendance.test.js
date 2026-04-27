@@ -1212,21 +1212,25 @@ describe('Attendance module integration', () => {
     expect(res.body.data.dates.length).toBe(7);
     expect(res.body.data.employees.length).toBeGreaterThanOrEqual(1);
 
-    const staffEmp = res.body.data.employees.find(e => e.user_id === fixtures.users.staffUser._id.toString());
+    const staffEmp = res.body.data.employees.find(
+      (e) => e.user_id === fixtures.users.staffUser._id.toString()
+    );
     expect(staffEmp).toBeTruthy();
     expect(staffEmp.days.length).toBe(7);
 
     // Day 5 (Mar 27)
-    const day27 = staffEmp.days.find(d => d.date === '2026-03-27');
+    const day27 = staffEmp.days.find((d) => d.date === '2026-03-27');
     expect(day27.punches[0].time_label).toBe('09:00-17:00');
     expect(day27.total_adj).toBe(8);
 
     // Day 6 (Mar 28)
-    const day28 = staffEmp.days.find(d => d.date === '2026-03-28');
+    const day28 = staffEmp.days.find((d) => d.date === '2026-03-28');
     expect(day28.punches[0].time_label).toBe('09:00-12:00*'); // Has asterisk for manual
     expect(day28.total_adj).toBe(3);
 
     // Grand Totals check
-    expect(res.body.data.grand_totals.days.find(d => d.date === '2026-03-27').total_adj).toBeGreaterThanOrEqual(8);
+    expect(
+      res.body.data.grand_totals.days.find((d) => d.date === '2026-03-27').total_adj
+    ).toBeGreaterThanOrEqual(8);
   });
 });

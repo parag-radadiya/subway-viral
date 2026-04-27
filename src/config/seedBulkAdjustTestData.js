@@ -246,7 +246,6 @@ async function run() {
 
   const users = [];
   for (const userSeed of TEST_USERS) {
-
     const user = await ensureUser(userSeed, shop._id, roleMap);
     users.push(user);
   }

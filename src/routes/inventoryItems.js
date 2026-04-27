@@ -1,7 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const {
-  getItems, getItem, createItem, updateItem, deleteItem,
+  getItems,
+  getItem,
+  createItem,
+  updateItem,
+  deleteItem,
 } = require('../controllers/inventoryItemController');
 const { protect } = require('../middleware/authMiddleware');
 const { requirePermission } = require('../middleware/permMiddleware');

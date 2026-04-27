@@ -3,11 +3,7 @@ const app = require('../../src/app');
 const { expectEnvelope } = require('../helpers/assertions');
 const { login } = require('../helpers/auth');
 const { seedTestData } = require('../helpers/seedTestData');
-const {
-  connectSandboxDb,
-  clearSandboxDb,
-  disconnectSandboxDb,
-} = require('../setup/testDb');
+const { connectSandboxDb, clearSandboxDb, disconnectSandboxDb } = require('../setup/testDb');
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -32,9 +28,7 @@ describe('Observability dashboard integration', () => {
       .post('/api/auth/login')
       .send({ email: 'root@org.com', password: 'WrongPassword' });
 
-    await request(app)
-      .get('/api/users')
-      .set('Authorization', `Bearer ${rootLogin.token}`);
+    await request(app).get('/api/users').set('Authorization', `Bearer ${rootLogin.token}`);
 
     await delay(120);
 
@@ -51,9 +45,7 @@ describe('Observability dashboard integration', () => {
   it('allows root to view error log list', async () => {
     const rootLogin = await login('root@org.com', 'Root@1234');
 
-    await request(app)
-      .post('/api/auth/login')
-      .send({ email: 'root@org.com' });
+    await request(app).post('/api/auth/login').send({ email: 'root@org.com' });
 
     await delay(120);
 
@@ -80,5 +72,3 @@ describe('Observability dashboard integration', () => {
     expectEnvelope(errorsRes, 403);
   });
 });
-
-

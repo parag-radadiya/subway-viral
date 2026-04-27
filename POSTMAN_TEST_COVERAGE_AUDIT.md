@@ -72,4 +72,3 @@ The test case catalog has been updated to match implemented/tested behavior:
 - Postman coverage for rota + attendance role views is now aligned with current backend routes.
 - Integration test coverage for rota + attendance success/error/security paths is present and currently passing.
 - `TEST_CASES.md` now reflects the implemented behavior more accurately for role-scoped access.
-

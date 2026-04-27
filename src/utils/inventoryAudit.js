@@ -29,4 +29,3 @@ const recordInventoryAudit = async ({
 };
 
 module.exports = { recordInventoryAudit };
-

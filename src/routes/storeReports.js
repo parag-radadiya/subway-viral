@@ -62,20 +62,10 @@ router.get(
 
 // Weekly 2026B CRUD
 router.get('/weekly', protect, requirePermission('can_view_all_staff'), getWeekly2026);
-router.post(
-  '/weekly',
-  protect,
-  requirePermission('can_manage_rotas'),
-  upsertSingleWeekly2026
-);
+router.post('/weekly', protect, requirePermission('can_manage_rotas'), upsertSingleWeekly2026);
 
 // Monthly Sale 2026 CRUD
-router.get(
-  '/monthly-sale',
-  protect,
-  requirePermission('can_view_all_staff'),
-  getMonthlySale2026
-);
+router.get('/monthly-sale', protect, requirePermission('can_view_all_staff'), getMonthlySale2026);
 router.post(
   '/monthly-sale',
   protect,
@@ -87,4 +77,3 @@ router.post(
 router.get('/export', protect, requirePermission('can_view_all_staff'), exportExcel);
 
 module.exports = router;
-

@@ -37,7 +37,11 @@ const buildReadScope = (user) => {
   if (permissions.can_manage_shops || permissions.can_manage_roles) {
     return { mode: 'all', shopScope: { all: true, ids: [] } };
   }
-  if (permissions.can_view_all_staff || permissions.can_manage_inventory || permissions.can_manual_punch) {
+  if (
+    permissions.can_view_all_staff ||
+    permissions.can_manage_inventory ||
+    permissions.can_manual_punch
+  ) {
     return { mode: 'shops', shopScope: buildShopScope(user) };
   }
   return { mode: 'self', shopScope: { all: false, ids: [] } };

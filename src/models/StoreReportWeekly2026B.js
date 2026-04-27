@@ -94,4 +94,3 @@ storeReportWeekly2026BSchema.index(
 );
 
 module.exports = mongoose.model('StoreReportWeekly2026B', storeReportWeekly2026BSchema);
-

@@ -8,11 +8,7 @@ const User = require('../../src/models/User');
 const { expectEnvelope } = require('../helpers/assertions');
 const { login } = require('../helpers/auth');
 const { seedTestData } = require('../helpers/seedTestData');
-const {
-  connectSandboxDb,
-  clearSandboxDb,
-  disconnectSandboxDb,
-} = require('../setup/testDb');
+const { connectSandboxDb, clearSandboxDb, disconnectSandboxDb } = require('../setup/testDb');
 
 describe('Inventory and query module integration', () => {
   let fixtures;
@@ -462,5 +458,3 @@ describe('Inventory and query module integration', () => {
     expect(totalAuditEntries).toBeGreaterThanOrEqual(4);
   });
 });
-
-

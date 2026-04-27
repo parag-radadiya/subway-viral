@@ -1293,9 +1293,7 @@ describe('Store reports integration', () => {
     expect(postRes.body.data.record).toBeTruthy();
     expect(postRes.body.data.record.store_name_raw).toBe('Baker St');
     expect(postRes.body.data.record.store_key).toBe('baker st');
-    expect(String(postRes.body.data.record.shop_id)).toBe(
-      String(fixtures.shops.mainShop._id)
-    );
+    expect(String(postRes.body.data.record.shop_id)).toBe(String(fixtures.shops.mainShop._id));
 
     const getRes = await request(app)
       .get('/api/store-reports/weekly')
@@ -1324,9 +1322,7 @@ describe('Store reports integration', () => {
     expectEnvelope(postRes, 200);
     expect(postRes.body.data.record).toBeTruthy();
     expect(postRes.body.data.record.store_name_raw).toBe('Camden');
-    expect(String(postRes.body.data.record.shop_id)).toBe(
-      String(fixtures.shops.eastShop._id)
-    );
+    expect(String(postRes.body.data.record.shop_id)).toBe(String(fixtures.shops.eastShop._id));
 
     const getRes = await request(app)
       .get('/api/store-reports/monthly-sale')
@@ -1439,4 +1435,3 @@ describe('Store reports integration', () => {
     expect(camdenRow['grossSale']).toBe(12000);
   });
 });
-

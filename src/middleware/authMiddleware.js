@@ -5,10 +5,7 @@ const AppError = require('../utils/AppError');
 const protect = async (req, res, next) => {
   let token;
 
-  if (
-    req.headers.authorization &&
-    req.headers.authorization.startsWith('Bearer ')
-  ) {
+  if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
     token = req.headers.authorization.split(' ')[1];
   }
 
@@ -18,9 +15,7 @@ const protect = async (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = await User.findById(decoded.id)
-      .select('-password_hash')
-      .populate('role_id');
+    req.user = await User.findById(decoded.id).select('-password_hash').populate('role_id');
 
     if (!req.user || !req.user.is_active) {
       return next(new AppError('User not found or deactivated', 401));

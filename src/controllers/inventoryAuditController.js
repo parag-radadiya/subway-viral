@@ -77,4 +77,3 @@ const getAuditLogs = asyncHandler(async (req, res) => {
 });
 
 module.exports = { getAuditLogs };
-

@@ -51,4 +51,3 @@ const requestMetricSchema = new mongoose.Schema(
 requestMetricSchema.index({ day: 1, route: 1, method: 1, status_code: 1 }, { unique: true });
 
 module.exports = mongoose.model('RequestMetric', requestMetricSchema);
-

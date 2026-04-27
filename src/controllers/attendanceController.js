@@ -1800,27 +1800,27 @@ const getWeeklyPayrollReport = asyncHandler(async (req, res) => {
         daysMap: {},
         weekly_total: { total_before_adj: 0, total_adj: 0, adj_amount: 0 },
       };
-      dateStrArray.forEach(d => {
+      dateStrArray.forEach((d) => {
         employeesMap[uId].daysMap[d] = {
           date: d,
           punches: [],
           total_before_adj: 0,
           total_adj: 0,
-          adj_amount: 0
+          adj_amount: 0,
         };
       });
     }
 
     const dateKey = record.punch_in.toISOString().split('T')[0];
     const dayData = employeesMap[uId].daysMap[dateKey];
-    
+
     if (!dayData) return;
 
     let inTime = toHHMM(record.punch_in);
     let outTime = toHHMM(record.punch_out);
     let sysFlag = record.punch_out_source === 'Auto' ? '^' : '';
     let manFlag = record.is_manual ? '*' : '';
-    
+
     let timeLabel = `${inTime}-${outTime}${sysFlag}${manFlag}`;
 
     let diffMinutes = 0;
@@ -1828,7 +1828,7 @@ const getWeeklyPayrollReport = asyncHandler(async (req, res) => {
       diffMinutes = (new Date(record.punch_out) - new Date(record.punch_in)) / 60000;
     }
     const beforeAdjHours = parseFloat((Math.max(0, diffMinutes) / 60).toFixed(2));
-    
+
     let afterAdjHours = beforeAdjHours;
     if (record.effective_minutes != null) {
       afterAdjHours = parseFloat((record.effective_minutes / 60).toFixed(2));
@@ -1849,54 +1849,62 @@ const getWeeklyPayrollReport = asyncHandler(async (req, res) => {
 
   const grand_totals = {
     daysMap: {},
-    weekly_total: { total_before_adj: 0, total_adj: 0, adj_amount: 0 }
+    weekly_total: { total_before_adj: 0, total_adj: 0, adj_amount: 0 },
   };
-  dateStrArray.forEach(d => {
+  dateStrArray.forEach((d) => {
     grand_totals.daysMap[d] = {
       total_before_adj: 0,
       total_adj: 0,
-      adj_amount: 0
+      adj_amount: 0,
     };
   });
 
-  const employees = Object.values(employeesMap).map(emp => {
-    const days = dateStrArray.map(d => {
-      const dayData = emp.daysMap[d];
-      dayData.total_before_adj = parseFloat(dayData.total_before_adj.toFixed(2));
-      dayData.total_adj = parseFloat(dayData.total_adj.toFixed(2));
-      dayData.adj_amount = parseFloat((dayData.total_adj - dayData.total_before_adj).toFixed(2));
+  const employees = Object.values(employeesMap)
+    .map((emp) => {
+      const days = dateStrArray.map((d) => {
+        const dayData = emp.daysMap[d];
+        dayData.total_before_adj = parseFloat(dayData.total_before_adj.toFixed(2));
+        dayData.total_adj = parseFloat(dayData.total_adj.toFixed(2));
+        dayData.adj_amount = parseFloat((dayData.total_adj - dayData.total_before_adj).toFixed(2));
 
-      emp.weekly_total.total_before_adj += dayData.total_before_adj;
-      emp.weekly_total.total_adj += dayData.total_adj;
+        emp.weekly_total.total_before_adj += dayData.total_before_adj;
+        emp.weekly_total.total_adj += dayData.total_adj;
 
-      grand_totals.daysMap[d].total_before_adj += dayData.total_before_adj;
-      grand_totals.daysMap[d].total_adj += dayData.total_adj;
+        grand_totals.daysMap[d].total_before_adj += dayData.total_before_adj;
+        grand_totals.daysMap[d].total_adj += dayData.total_adj;
 
-      return dayData;
-    });
+        return dayData;
+      });
 
-    emp.weekly_total.total_before_adj = parseFloat(emp.weekly_total.total_before_adj.toFixed(2));
-    emp.weekly_total.total_adj = parseFloat(emp.weekly_total.total_adj.toFixed(2));
-    emp.weekly_total.adj_amount = parseFloat((emp.weekly_total.total_adj - emp.weekly_total.total_before_adj).toFixed(2));
+      emp.weekly_total.total_before_adj = parseFloat(emp.weekly_total.total_before_adj.toFixed(2));
+      emp.weekly_total.total_adj = parseFloat(emp.weekly_total.total_adj.toFixed(2));
+      emp.weekly_total.adj_amount = parseFloat(
+        (emp.weekly_total.total_adj - emp.weekly_total.total_before_adj).toFixed(2)
+      );
 
-    grand_totals.weekly_total.total_before_adj += emp.weekly_total.total_before_adj;
-    grand_totals.weekly_total.total_adj += emp.weekly_total.total_adj;
+      grand_totals.weekly_total.total_before_adj += emp.weekly_total.total_before_adj;
+      grand_totals.weekly_total.total_adj += emp.weekly_total.total_adj;
 
-    delete emp.daysMap;
-    emp.days = days;
-    return emp;
-  }).sort((a, b) => a.employee_name.localeCompare(b.employee_name));
+      delete emp.daysMap;
+      emp.days = days;
+      return emp;
+    })
+    .sort((a, b) => a.employee_name.localeCompare(b.employee_name));
 
-  Object.values(grand_totals.daysMap).forEach(gd => {
+  Object.values(grand_totals.daysMap).forEach((gd) => {
     gd.total_before_adj = parseFloat(gd.total_before_adj.toFixed(2));
     gd.total_adj = parseFloat(gd.total_adj.toFixed(2));
     gd.adj_amount = parseFloat((gd.total_adj - gd.total_before_adj).toFixed(2));
   });
-  const grandDays = dateStrArray.map(d => ({ date: d, ...grand_totals.daysMap[d] }));
-  
-  grand_totals.weekly_total.total_before_adj = parseFloat(grand_totals.weekly_total.total_before_adj.toFixed(2));
+  const grandDays = dateStrArray.map((d) => ({ date: d, ...grand_totals.daysMap[d] }));
+
+  grand_totals.weekly_total.total_before_adj = parseFloat(
+    grand_totals.weekly_total.total_before_adj.toFixed(2)
+  );
   grand_totals.weekly_total.total_adj = parseFloat(grand_totals.weekly_total.total_adj.toFixed(2));
-  grand_totals.weekly_total.adj_amount = parseFloat((grand_totals.weekly_total.total_adj - grand_totals.weekly_total.total_before_adj).toFixed(2));
+  grand_totals.weekly_total.adj_amount = parseFloat(
+    (grand_totals.weekly_total.total_adj - grand_totals.weekly_total.total_before_adj).toFixed(2)
+  );
 
   return sendSuccess(res, 'Weekly payroll report generated successfully', {
     shop: {
@@ -1911,8 +1919,8 @@ const getWeeklyPayrollReport = asyncHandler(async (req, res) => {
     employees,
     grand_totals: {
       days: grandDays,
-      weekly_total: grand_totals.weekly_total
-    }
+      weekly_total: grand_totals.weekly_total,
+    },
   });
 });
 
