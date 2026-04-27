@@ -25,10 +25,17 @@ const app = express();
 
 const normalizeOrigin = (value) => {
   if (!value) return null;
-  const trimmed = String(value).trim().replace(/\/+$/, '');
+  const trimmed = String(value).trim();
   if (!trimmed) return null;
-  if (/^https?:\/\//i.test(trimmed)) return trimmed;
-  return `https://${trimmed}`;
+
+  const candidate = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try {
+    const parsed = new URL(candidate);
+    if (!/^https?:$/i.test(parsed.protocol)) return null;
+    return parsed.origin;
+  } catch {
+    return null;
+  }
 };
 
 const configuredOrigins = [
