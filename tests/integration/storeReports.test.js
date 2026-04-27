@@ -1,6 +1,12 @@
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const xlsx = require('xlsx');
 const request = require('supertest');
 const app = require('../../src/app');
 const StoreReportEntry = require('../../src/models/StoreReportEntry');
+const StoreReportWeekly2026B = require('../../src/models/StoreReportWeekly2026B');
+const StoreReportMonthlySale2026 = require('../../src/models/StoreReportMonthlySale2026');
 const { expectEnvelope } = require('../helpers/assertions');
 const { login } = require('../helpers/auth');
 const { seedTestData } = require('../helpers/seedTestData');
@@ -968,6 +974,71 @@ describe('Store reports integration', () => {
     expectEnvelope(dashboardRes, 400);
   });
 
+  it('REPORT-021: admin can import historical workbook into all three report collections', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+    const tempFilePath = path.join(os.tmpdir(), `store-reports-${Date.now()}.xlsx`);
+
+    const workbook = xlsx.utils.book_new();
+    const janDecSheet = xlsx.utils.aoa_to_sheet([
+      ['Jan-26', 'STORE ', 'Gross Sale', 'Net Sale', 'Vat', 'Vat %'],
+      ['', '', '', '', '', ''],
+      ['', fixtures.shops.mainShop.name, '1000', '800', '200', '20%'],
+    ]);
+    const weeklySheet = xlsx.utils.aoa_to_sheet([
+      ['', 'Week Ending', 'Sales', 'Net', 'Labour', 'VAT 18%', 'Total', 'Income'],
+      ['1', '29/12 To 04/01', '500', '410', '40', '90', '371.45', '128.55'],
+    ]);
+    const monthlySaleSheet = xlsx.utils.aoa_to_sheet([
+      ['Jan-26', 'STORE ', 'Gross Sale', 'Net Sale', 'Vat', 'Vat %', 'Customer Count'],
+      ['', '', '', '', '', '', ''],
+      ['', fixtures.shops.mainShop.name, '1200', '1000', '200', '20%', '90'],
+    ]);
+
+    xlsx.utils.book_append_sheet(workbook, janDecSheet, 'Jan-Dec 26');
+    xlsx.utils.book_append_sheet(workbook, weeklySheet, 'Weekly 2026B');
+    xlsx.utils.book_append_sheet(workbook, monthlySaleSheet, 'Monthly Sale 2026');
+    xlsx.writeFile(workbook, tempFilePath);
+
+    try {
+      const importRes = await request(app)
+        .post('/api/store-reports/import-historical-workbook')
+        .set('Authorization', `Bearer ${adminLogin.token}`)
+        .send({
+          file_path: tempFilePath,
+          year: 2026,
+          weekly_store_name: fixtures.shops.mainShop.name,
+        });
+
+      expectEnvelope(importRes, 200);
+      expect(importRes.body.data.imported.store_report_entry).toBeGreaterThan(0);
+      expect(importRes.body.data.imported.weekly_2026b).toBe(1);
+      expect(importRes.body.data.imported.monthly_sale_2026).toBe(1);
+
+      expect(
+        await StoreReportEntry.countDocuments({ source_type: 'excel_raw', year: 2026, month: 1 })
+      ).toBeGreaterThan(0);
+      expect(await StoreReportWeekly2026B.countDocuments()).toBe(1);
+      expect(await StoreReportMonthlySale2026.countDocuments()).toBe(1);
+
+      const secondImportRes = await request(app)
+        .post('/api/store-reports/import-historical-workbook')
+        .set('Authorization', `Bearer ${adminLogin.token}`)
+        .send({
+          file_path: tempFilePath,
+          year: 2026,
+          weekly_store_name: fixtures.shops.mainShop.name,
+        });
+
+      expectEnvelope(secondImportRes, 200);
+      expect(await StoreReportWeekly2026B.countDocuments()).toBe(1);
+      expect(await StoreReportMonthlySale2026.countDocuments()).toBe(1);
+    } finally {
+      if (fs.existsSync(tempFilePath)) {
+        fs.unlinkSync(tempFilePath);
+      }
+    }
+  });
+
   it('REPORT-015: store ranking returns sorted stores by selected metric', async () => {
     const adminLogin = await login('admin@org.com', 'Admin@1234');
 
@@ -1088,4 +1159,284 @@ describe('Store reports integration', () => {
 
     expectEnvelope(analyticsRes, 403);
   });
+
+  it('REPORT-020: alias-based store name matching resolves shop_id via admin-weekly', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+
+    // 'Baker St' is an alias for 'Main Branch' (set in seedTestData)
+    const upsertRes = await request(app)
+      .post('/api/store-reports/admin-weekly')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .send({
+        entries: [
+          {
+            report_type: 'weekly_financial',
+            store_name: 'Baker St',
+            year: 2026,
+            month: 6,
+            week_number: 25,
+            week_range_label: '15/06 to 21/06',
+            metrics: { sales: 1250, net: 900 },
+          },
+          {
+            report_type: 'weekly_financial',
+            store_name: 'Camden',
+            year: 2026,
+            month: 6,
+            week_number: 25,
+            week_range_label: '15/06 to 21/06',
+            metrics: { sales: 800, net: 550 },
+          },
+        ],
+      });
+
+    expectEnvelope(upsertRes, 200);
+    expect(upsertRes.body.data.failed).toBe(0);
+
+    const tableRes = await request(app)
+      .get('/api/store-reports/table')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({
+        view: 'admin_weekly',
+        report_type: 'weekly_financial',
+        year: 2026,
+        month: 6,
+        week_number: 25,
+      });
+
+    expectEnvelope(tableRes, 200);
+    expect(tableRes.body.data.count).toBe(2);
+
+    const mainRow = tableRes.body.data.rows.find(
+      (row) => String(row.shopId) === String(fixtures.shops.mainShop._id)
+    );
+    const eastRow = tableRes.body.data.rows.find(
+      (row) => String(row.shopId) === String(fixtures.shops.eastShop._id)
+    );
+
+    expect(mainRow).toBeTruthy();
+    expect(mainRow.sales).toBe(1250);
+    expect(eastRow).toBeTruthy();
+    expect(eastRow.sales).toBe(800);
+  });
+
+  it('REPORT-021: STORE label rows are skipped during monthly sale import', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+
+    const tmpDir = os.tmpdir();
+    const wb = xlsx.utils.book_new();
+
+    const monthlyData = [
+      ['Store', 'Gross Sale', 'Net Sale'],
+      ['Jan-26'],
+      ['STORE', 100, 80],
+      ['Baker St', 500, 400],
+      ['Camden', 300, 250],
+    ];
+    const monthlySheet = xlsx.utils.aoa_to_sheet(monthlyData);
+    xlsx.utils.book_append_sheet(wb, monthlySheet, 'Monthly Sale 2026');
+
+    const weeklyData = [
+      ['', 'Week Ending', 'Sales', 'Net'],
+      [1, '01/01 to 07/01', 100, 80],
+    ];
+    const weeklySheet = xlsx.utils.aoa_to_sheet(weeklyData);
+    xlsx.utils.book_append_sheet(wb, weeklySheet, 'Weekly 2026');
+
+    const janDecData = [['Store', 'Week Ending', 'Sales', 'Net']];
+    const janDecSheet = xlsx.utils.aoa_to_sheet(janDecData);
+    xlsx.utils.book_append_sheet(wb, janDecSheet, 'Jan-Dec 26');
+
+    const testFile = path.join(tmpDir, `alias-store-test-${Date.now()}.xlsx`);
+    xlsx.writeFile(wb, testFile);
+
+    try {
+      const importRes = await request(app)
+        .post('/api/store-reports/import-historical-workbook')
+        .set('Authorization', `Bearer ${adminLogin.token}`)
+        .send({ file_path: testFile, year: 2026 });
+
+      expectEnvelope(importRes, 200);
+
+      // STORE row should be skipped as a label row
+      const monthlySaleRecords = await StoreReportMonthlySale2026.find({
+        source_sheet: 'Monthly Sale 2026',
+      });
+
+      const storeNames = monthlySaleRecords.map((r) => r.store_name_raw);
+      expect(storeNames).not.toContain('STORE');
+
+      // Baker St and Camden should resolve to shops via aliases
+      const matched = monthlySaleRecords.filter((r) => r.shop_id != null);
+      expect(matched.length).toBe(2);
+    } finally {
+      if (fs.existsSync(testFile)) fs.unlinkSync(testFile);
+    }
+  });
+
+  it('REPORT-022: admin can POST a single weekly entry and GET it back', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+
+    const postRes = await request(app)
+      .post('/api/store-reports/weekly')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .send({
+        store_name: 'Baker St',
+        year: 2026,
+        month: 3,
+        week_number: 10,
+        week_range_label: '02/03 to 08/03',
+        metrics: { sales: 4500, net: 3200 },
+      });
+
+    expectEnvelope(postRes, 200);
+    expect(postRes.body.data.record).toBeTruthy();
+    expect(postRes.body.data.record.store_name_raw).toBe('Baker St');
+    expect(postRes.body.data.record.store_key).toBe('baker st');
+    expect(String(postRes.body.data.record.shop_id)).toBe(
+      String(fixtures.shops.mainShop._id)
+    );
+
+    const getRes = await request(app)
+      .get('/api/store-reports/weekly')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({ year: 2026, month: 3, week_number: 10 });
+
+    expectEnvelope(getRes, 200);
+    expect(getRes.body.data.rows.length).toBe(1);
+    expect(getRes.body.data.rows[0].metrics.sales).toBe(4500);
+    expect(getRes.body.data.count).toBe(1);
+  });
+
+  it('REPORT-023: admin can POST a single monthly-sale entry and GET it back', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+
+    const postRes = await request(app)
+      .post('/api/store-reports/monthly-sale')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .send({
+        store_name: 'Camden',
+        year: 2026,
+        month: 5,
+        metrics: { grossSale: 12000, netSale: 9500, vat: 2500 },
+      });
+
+    expectEnvelope(postRes, 200);
+    expect(postRes.body.data.record).toBeTruthy();
+    expect(postRes.body.data.record.store_name_raw).toBe('Camden');
+    expect(String(postRes.body.data.record.shop_id)).toBe(
+      String(fixtures.shops.eastShop._id)
+    );
+
+    const getRes = await request(app)
+      .get('/api/store-reports/monthly-sale')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({ year: 2026, month: 5 });
+
+    expectEnvelope(getRes, 200);
+    expect(getRes.body.data.rows.length).toBe(1);
+    expect(getRes.body.data.rows[0].metrics.grossSale).toBe(12000);
+    expect(getRes.body.data.count).toBe(1);
+  });
+
+  it('REPORT-024: POST weekly validates required fields', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+
+    const noYear = await request(app)
+      .post('/api/store-reports/weekly')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .send({ store_name: 'Baker St', metrics: { sales: 100 } });
+
+    expectEnvelope(noYear, 400);
+
+    const noMetrics = await request(app)
+      .post('/api/store-reports/weekly')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .send({ store_name: 'Baker St', year: 2026, month: 1, week_number: 1 });
+
+    expectEnvelope(noMetrics, 400);
+
+    const noStore = await request(app)
+      .post('/api/store-reports/weekly')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .send({ year: 2026, month: 1, week_number: 1, metrics: { sales: 100 } });
+
+    expectEnvelope(noStore, 400);
+  });
+
+  it('REPORT-025: POST monthly-sale validates required fields', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+
+    const noYear = await request(app)
+      .post('/api/store-reports/monthly-sale')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .send({ store_name: 'Camden', metrics: { grossSale: 100 } });
+
+    expectEnvelope(noYear, 400);
+
+    const noMetrics = await request(app)
+      .post('/api/store-reports/monthly-sale')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .send({ store_name: 'Camden', year: 2026, month: 1 });
+
+    expectEnvelope(noMetrics, 400);
+  });
+
+  it('REPORT-026: export returns xlsx with correct sheets after inserting data', async () => {
+    const xlsx = require('xlsx');
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+
+    // Seed weekly + monthly data
+    await request(app)
+      .post('/api/store-reports/weekly')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .send({
+        store_name: 'Baker St',
+        year: 2026,
+        month: 3,
+        week_number: 10,
+        week_range_label: '02/03 to 08/03',
+        metrics: { sales: 4500, net: 3200 },
+      });
+
+    await request(app)
+      .post('/api/store-reports/monthly-sale')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .send({
+        store_name: 'Camden',
+        year: 2026,
+        month: 5,
+        metrics: { grossSale: 12000, netSale: 9500 },
+      });
+
+    const exportRes = await request(app)
+      .get('/api/store-reports/export')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({ year: 2026 })
+      .buffer(true)
+      .parse((res, cb) => {
+        const chunks = [];
+        res.on('data', (chunk) => chunks.push(chunk));
+        res.on('end', () => cb(null, Buffer.concat(chunks)));
+      });
+
+    expect(exportRes.status).toBe(200);
+    expect(exportRes.headers['content-type']).toContain('spreadsheetml');
+    expect(exportRes.headers['content-disposition']).toContain('store_report_2026.xlsx');
+
+    const wb = xlsx.read(exportRes.body, { type: 'buffer' });
+    expect(wb.SheetNames).toContain('Weekly');
+    expect(wb.SheetNames).toContain('Monthly Sale');
+
+    const weeklyData = xlsx.utils.sheet_to_json(wb.Sheets['Weekly']);
+    expect(weeklyData.length).toBeGreaterThanOrEqual(1);
+    expect(weeklyData[0]['Store']).toBe('Baker St');
+    expect(weeklyData[0]['sales']).toBe(4500);
+
+    const monthlyData = xlsx.utils.sheet_to_json(wb.Sheets['Monthly Sale']);
+    const camdenRow = monthlyData.find((r) => r['Store'] === 'Camden');
+    expect(camdenRow).toBeTruthy();
+    expect(camdenRow['grossSale']).toBe(12000);
+  });
 });
+

@@ -7,35 +7,35 @@ const Shop = require('../models/Shop');
 const User = require('../models/User');
 const Attendance = require('../models/Attendance');
 
-const SHOP_NAME = 'Bulk Adjust Test Shop';
+const SHOP_NAME = 'Test Adjust Test Shop';
 const TEST_USERS = [
   {
-    name: 'Bulk Staff One',
-    email: 'bulk.staff1@org.com',
+    name: 'Test Staff One',
+    email: 'Test.staff1@org.com',
     role: 'Staff',
     password: 'Staff1@1234',
-    device_id: 'bulk-staff-device-1',
+    device_id: 'Test-staff-device-1',
   },
   {
-    name: 'Bulk Staff Two',
-    email: 'bulk.staff2@org.com',
+    name: 'Test Staff Two',
+    email: 'Test.staff2@org.com',
     role: 'Staff',
     password: 'Staff2@1234',
-    device_id: 'bulk-staff-device-2',
+    device_id: 'Test-staff-device-2',
   },
   {
-    name: 'Bulk Staff Three',
-    email: 'bulk.staff3@org.com',
+    name: 'Test Staff Three',
+    email: 'Test.staff3@org.com',
     role: 'Staff',
     password: 'Staff3@1234',
-    device_id: 'bulk-staff-device-3',
+    device_id: 'Test-staff-device-3',
   },
   {
-    name: 'Bulk Sub Manager',
-    email: 'bulk.submanager@org.com',
+    name: 'Test Sub Manager',
+    email: 'Test.submanager@org.com',
     role: 'Sub-Manager',
     password: 'SubMgr@1234',
-    device_id: 'bulk-submgr-device-1',
+    device_id: 'Test-submgr-device-1',
   },
 ];
 
@@ -133,7 +133,7 @@ async function ensureShop() {
           effective_to: null,
           changed_at: new Date(),
           changed_by: null,
-          note: 'Seeded for bulk adjust testing',
+          note: 'Seeded for Test adjust testing',
         },
       ],
     });
@@ -246,14 +246,14 @@ async function run() {
 
   const users = [];
   for (const userSeed of TEST_USERS) {
-     
+
     const user = await ensureUser(userSeed, shop._id, roleMap);
     users.push(user);
   }
 
   const attendanceSummary = await seedAttendance(shop._id, users);
 
-  console.log('Bulk adjust test data seeded successfully');
+  console.log('Test adjust test data seeded successfully');
   console.log(`Shop: ${shop.name} (${shop._id})`);
   users.forEach((user) => {
     console.log(`User: ${user.email} (${user._id})`);
@@ -264,7 +264,7 @@ async function run() {
 
 run()
   .catch((error) => {
-    console.error('Failed to seed bulk-adjust test data:', error.message);
+    console.error('Failed to seed Test-adjust test data:', error.message);
     process.exitCode = 1;
   })
   .finally(async () => {

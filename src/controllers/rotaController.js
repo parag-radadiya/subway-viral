@@ -1,9 +1,13 @@
 const Rota = require('../models/Rota');
+const Shop = require('../models/Shop');
 const AppError = require('../utils/AppError');
 const asyncHandler = require('../utils/asyncHandler');
 const { sendSuccess } = require('../utils/response');
 const { buildShopScope, isShopAllowed } = require('../middleware/shopScopeMiddleware');
 const { parsePagination, toPageMeta } = require('../utils/pagination');
+
+const DEFAULT_MIN_SHIFT_DURATION_HOURS = 2;
+const DEFAULT_MAX_SHIFT_DURATION_HOURS = 8;
 
 function buildDates(weekStart, days) {
   const base = new Date(weekStart);
@@ -106,6 +110,11 @@ function normalizeRotaPayload(payload) {
   if (!shiftEnd || Number.isNaN(shiftEnd.getTime())) {
     throw new AppError('shift_end is required (or provide shift_date + end_time)', 400);
   }
+  const builtFromTimePattern = !payload.shift_end && payload.shift_date && payload.end_time;
+  if (builtFromTimePattern && shiftEnd <= shiftStart) {
+    shiftEnd.setUTCDate(shiftEnd.getUTCDate() + 1);
+  }
+
   if (shiftEnd <= shiftStart) {
     throw new AppError('shift_end must be after shift_start', 400);
   }
@@ -122,6 +131,39 @@ function normalizeRotaPayload(payload) {
     shift_end: shiftEnd,
     shift_date: shiftDate,
   };
+}
+
+function computeShiftDurationHours(shiftStart, shiftEnd) {
+  const ms = new Date(shiftEnd).getTime() - new Date(shiftStart).getTime();
+  return Number((ms / (1000 * 60 * 60)).toFixed(2));
+}
+
+async function fetchShopShiftDurationCaps(shopId) {
+  const shop = await Shop.findById(shopId).select(
+    'min_shift_duration_hours max_shift_duration_hours'
+  );
+  if (!shop) throw new AppError('Shop not found', 404);
+
+  const rawMin = Number(shop.min_shift_duration_hours);
+  const rawMax = Number(shop.max_shift_duration_hours);
+  const minHours = Number.isFinite(rawMin) && rawMin > 0 ? rawMin : DEFAULT_MIN_SHIFT_DURATION_HOURS;
+  const maxHours = Number.isFinite(rawMax) && rawMax > 0 ? rawMax : DEFAULT_MAX_SHIFT_DURATION_HOURS;
+
+  return {
+    minHours,
+    maxHours: maxHours >= minHours ? maxHours : minHours,
+  };
+}
+
+function assertShiftDurationWithinShopCaps({ shiftStart, shiftEnd, caps, userId }) {
+  const durationHours = computeShiftDurationHours(shiftStart, shiftEnd);
+  if (durationHours < caps.minHours || durationHours > caps.maxHours) {
+    const userSuffix = userId ? ` for user ${userId}` : '';
+    throw new AppError(
+      `Shift duration${userSuffix} must be between ${caps.minHours}h and ${caps.maxHours}h`,
+      400
+    );
+  }
 }
 
 function isOverlappingWindow(aStart, aEnd, bStart, bEnd) {
@@ -296,6 +338,13 @@ const createRota = asyncHandler(async (req, res) => {
   const scope = buildRotaManageScope(req.user);
   assertManageShopAllowed(scope, req.body.shop_id);
   const payload = normalizeRotaPayload(req.body);
+  const caps = await fetchShopShiftDurationCaps(payload.shop_id);
+  assertShiftDurationWithinShopCaps({
+    shiftStart: payload.shift_start,
+    shiftEnd: payload.shift_end,
+    caps,
+    userId: payload.user_id,
+  });
 
   await assertNoOverlapOrThrow({
     userId: payload.user_id,
@@ -325,6 +374,13 @@ const updateRota = asyncHandler(async (req, res) => {
   assertManageShopAllowed(scope, existing.shop_id);
   if (req.body.shop_id) assertManageShopAllowed(scope, req.body.shop_id);
   const mergedPayload = normalizeRotaPayload({ ...existing.toObject(), ...req.body });
+  const caps = await fetchShopShiftDurationCaps(mergedPayload.shop_id);
+  assertShiftDurationWithinShopCaps({
+    shiftStart: mergedPayload.shift_start,
+    shiftEnd: mergedPayload.shift_end,
+    caps,
+    userId: mergedPayload.user_id,
+  });
 
   await assertNoOverlapOrThrow({
     userId: mergedPayload.user_id,
@@ -378,6 +434,7 @@ const bulkCreate = asyncHandler(async (req, res) => {
 
   const scope = buildRotaManageScope(req.user);
   assertManageShopAllowed(scope, shop_id);
+  const caps = await fetchShopShiftDurationCaps(shop_id);
 
   const dates = buildDates(week_start, days);
   const { start: weekStart, end: weekEnd } = weekBounds(week_start);
@@ -403,7 +460,18 @@ const bulkCreate = asyncHandler(async (req, res) => {
 
       const shiftStart = combineDateAndTime(date, assignment.start_time);
       const shiftEnd = combineDateAndTime(date, assignment.end_time);
-      if (!shiftStart || !shiftEnd || shiftEnd <= shiftStart) {
+      if (!shiftStart || !shiftEnd) {
+        throw new AppError(
+          `Invalid shift window for user ${assignment.user_id}. Ensure start_time and end_time are valid HH:MM values.`,
+          400
+        );
+      }
+
+      if (shiftEnd <= shiftStart) {
+        shiftEnd.setUTCDate(shiftEnd.getUTCDate() + 1);
+      }
+
+      if (shiftEnd <= shiftStart) {
         throw new AppError(
           `Invalid shift window for user ${assignment.user_id}. Ensure end_time is after start_time.`,
           400
@@ -415,6 +483,13 @@ const bulkCreate = asyncHandler(async (req, res) => {
           400
         );
       }
+
+      assertShiftDurationWithinShopCaps({
+        shiftStart,
+        shiftEnd,
+        caps,
+        userId: assignment.user_id,
+      });
 
       toInsert.push({
         user_id: assignment.user_id,

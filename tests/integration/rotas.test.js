@@ -515,6 +515,66 @@ describe('Rota module integration', () => {
     expect(res.body.data.skipped).toBe(1);
     expect(res.body.data.conflicts[0].reason).toContain('Overlapping shift');
   });
+
+  it('ROTA-024: rejects rota outside shop min/max shift caps', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+    const managerLogin = await login('manager@org.com', 'Manager@1234');
+
+    const capsRes = await request(app)
+      .put(`/api/shops/${fixtures.shops.mainShop._id}`)
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .send({
+        min_shift_duration_hours: 2,
+        max_shift_duration_hours: 8,
+      });
+    expectEnvelope(capsRes, 200);
+
+    const tooLongRes = await request(app)
+      .post('/api/rotas')
+      .set('Authorization', `Bearer ${managerLogin.token}`)
+      .send({
+        user_id: fixtures.users.staffUser._id.toString(),
+        shop_id: fixtures.shops.mainShop._id.toString(),
+        shift_start: '2026-04-07T08:00:00.000Z',
+        shift_end: '2026-04-07T17:00:00.000Z',
+      });
+    expectEnvelope(tooLongRes, 400);
+
+    const tooShortRes = await request(app)
+      .post('/api/rotas')
+      .set('Authorization', `Bearer ${managerLogin.token}`)
+      .send({
+        user_id: fixtures.users.staffUser._id.toString(),
+        shop_id: fixtures.shops.mainShop._id.toString(),
+        shift_start: '2026-04-08T08:00:00.000Z',
+        shift_end: '2026-04-08T09:00:00.000Z',
+      });
+    expectEnvelope(tooShortRes, 400);
+  });
+
+  it('ROTA-025: bulk create supports overnight shifts', async () => {
+    const managerLogin = await login('manager@org.com', 'Manager@1234');
+
+    const res = await request(app)
+      .post('/api/rotas/bulk')
+      .set('Authorization', `Bearer ${managerLogin.token}`)
+      .send({
+        shop_id: fixtures.shops.mainShop._id.toString(),
+        week_start: '2026-04-13',
+        days: [0],
+        assignments: [
+          {
+            user_id: fixtures.users.staffUser._id.toString(),
+            start_time: '23:00',
+            end_time: '05:00',
+          },
+        ],
+      });
+
+    expectEnvelope(res, 201);
+    expect(res.body.data.created).toBe(1);
+    expect(res.body.data.skipped).toBe(0);
+  });
 });
 
 

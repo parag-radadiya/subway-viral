@@ -1176,4 +1176,57 @@ describe('Attendance module integration', () => {
     expect(res.body.data.to_date).toBe('2026-03-28T23:59:59.999Z');
     expect(Array.isArray(res.body.data.records)).toBe(true);
   });
+
+  it('ATT-038: weekly-payroll-report returns structured data for PDF generation', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+
+    await Attendance.insertMany([
+      {
+        user_id: fixtures.users.staffUser._id,
+        shop_id: fixtures.shops.mainShop._id,
+        punch_in: new Date('2026-03-27T09:00:00.000Z'),
+        punch_out: new Date('2026-03-27T17:00:00.000Z'),
+        punch_method: 'GPS+Biometric',
+      },
+      {
+        user_id: fixtures.users.staffUser._id,
+        shop_id: fixtures.shops.mainShop._id,
+        punch_in: new Date('2026-03-28T09:00:00.000Z'),
+        punch_out: new Date('2026-03-28T12:00:00.000Z'),
+        is_manual: true,
+        punch_method: 'GPS+Biometric',
+      },
+    ]);
+
+    const res = await request(app)
+      .get('/api/attendance/weekly-payroll-report')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({
+        shop_id: fixtures.shops.mainShop._id.toString(),
+        from_date: '2026-03-23',
+        to_date: '2026-03-29',
+      });
+
+    expectEnvelope(res, 200);
+    expect(res.body.data.shop.name).toBe('Main Branch');
+    expect(res.body.data.dates.length).toBe(7);
+    expect(res.body.data.employees.length).toBeGreaterThanOrEqual(1);
+
+    const staffEmp = res.body.data.employees.find(e => e.user_id === fixtures.users.staffUser._id.toString());
+    expect(staffEmp).toBeTruthy();
+    expect(staffEmp.days.length).toBe(7);
+
+    // Day 5 (Mar 27)
+    const day27 = staffEmp.days.find(d => d.date === '2026-03-27');
+    expect(day27.punches[0].time_label).toBe('09:00-17:00');
+    expect(day27.total_adj).toBe(8);
+
+    // Day 6 (Mar 28)
+    const day28 = staffEmp.days.find(d => d.date === '2026-03-28');
+    expect(day28.punches[0].time_label).toBe('09:00-12:00*'); // Has asterisk for manual
+    expect(day28.total_adj).toBe(3);
+
+    // Grand Totals check
+    expect(res.body.data.grand_totals.days.find(d => d.date === '2026-03-27').total_adj).toBeGreaterThanOrEqual(8);
+  });
 });

@@ -110,6 +110,8 @@ const options = {
             geofence_radius_m: { type: 'number', example: 150 },
             opening_time: { type: 'string', example: '08:00' },
             closing_time: { type: 'string', example: '22:00' },
+            min_shift_duration_hours: { type: 'number', example: 2, default: 2 },
+            max_shift_duration_hours: { type: 'number', example: 8, default: 8 },
           },
         },
         ShopInput: {
@@ -120,8 +122,18 @@ const options = {
             latitude: { type: 'number' },
             longitude: { type: 'number' },
             geofence_radius_m: { type: 'number', default: 100 },
-            opening_time: { type: 'string', example: '08:00' },
-            closing_time: { type: 'string', example: '22:00' },
+            opening_time: {
+              type: 'string',
+              example: '07:00',
+              description: 'HH:MM (24h).',
+            },
+            closing_time: {
+              type: 'string',
+              example: '05:00',
+              description: 'HH:MM (24h). If earlier than opening_time, it is treated as next-day closing.',
+            },
+            min_shift_duration_hours: { type: 'number', example: 2, default: 2 },
+            max_shift_duration_hours: { type: 'number', example: 8, default: 8 },
           },
         },
 

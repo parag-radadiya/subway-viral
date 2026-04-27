@@ -2,11 +2,19 @@ const fs = require('fs');
 const path = require('path');
 const Shop = require('../models/Shop');
 const StoreReportEntry = require('../models/StoreReportEntry');
+const StoreReportWeekly2026B = require('../models/StoreReportWeekly2026B');
+const StoreReportMonthlySale2026 = require('../models/StoreReportMonthlySale2026');
 const AppError = require('../utils/AppError');
 const asyncHandler = require('../utils/asyncHandler');
 const { sendSuccess } = require('../utils/response');
 const { parsePagination, toPageMeta } = require('../utils/pagination');
 const { buildShopScope, isShopAllowed } = require('../middleware/shopScopeMiddleware');
+
+const HISTORICAL_SHEET_ALIASES = {
+  janDec: ['Jan-Dec 26', 'Jan Dec 26'],
+  weekly2026b: ['Weekly 2026B', 'Weekly 2026'],
+  monthlySale2026: ['Monthly Sale 2026'],
+};
 
 const WEEKLY_NUMERIC_FIELDS = [
   'sales',
@@ -146,9 +154,39 @@ function collectAdditionalNumericMetrics(dataRow, headerRow, usedIndexes, reserv
   return extraMetrics;
 }
 
+function collectDynamicNumericMetrics(dataRow, headerRow, skipIndexes) {
+  const metrics = {};
+  const usedKeys = new Set();
+
+  for (let col = 0; col < headerRow.length; col += 1) {
+    if (skipIndexes.has(col)) continue;
+
+    const keyBase = toMetricKey(headerRow[col]);
+    if (!keyBase) continue;
+
+    const value = sanitizeNumber(dataRow[col]);
+    if (value === null) continue;
+
+    let key = keyBase;
+    let suffix = 2;
+    while (usedKeys.has(key)) {
+      key = `${keyBase}${suffix}`;
+      suffix += 1;
+    }
+
+    usedKeys.add(key);
+    metrics[key] = value;
+  }
+
+  return metrics;
+}
+
+const SKIP_STORE_LABELS = new Set(['total', 'store']);
+
 const isTotalRow = (storeName) => {
   const normalized = normalizeStoreName(storeName);
-  return normalized === 'total' || normalized.startsWith('total ');
+  if (SKIP_STORE_LABELS.has(normalized)) return true;
+  return normalized.startsWith('total ');
 };
 
 const toMonthNumber = (monthName) => {
@@ -244,6 +282,20 @@ function parseWeekRange(weekRange, fallbackYear) {
     month: weekEnd.getUTCMonth() + 1,
     weekRangeLabel: `${String(startDay).padStart(2, '0')}/${String(startMonth).padStart(2, '0')} to ${String(endDay).padStart(2, '0')}/${String(endMonth).padStart(2, '0')}`,
   };
+}
+
+function resolveSheetName(sheetNames, aliases) {
+  const normalizedToRaw = new Map();
+  (sheetNames || []).forEach((name) => {
+    normalizedToRaw.set(normalizeHeader(name), name);
+  });
+
+  for (let i = 0; i < aliases.length; i += 1) {
+    const match = normalizedToRaw.get(normalizeHeader(aliases[i]));
+    if (match) return match;
+  }
+
+  return null;
 }
 
 function toUtcDayStart(value) {
@@ -626,16 +678,42 @@ function extractMonthlyRows(sheetRows, defaultYear) {
 }
 
 async function buildShopLookup() {
-  const shops = await Shop.find({}).select('_id name');
+  const shops = await Shop.find({}).select('_id name aliases');
   const byId = new Map();
   const byName = new Map();
 
   shops.forEach((shop) => {
     byId.set(shop._id.toString(), shop);
     byName.set(normalizeStoreName(shop.name), shop);
+    (shop.aliases || []).forEach((alias) => {
+      const key = normalizeStoreName(alias);
+      if (key && !byName.has(key)) {
+        byName.set(key, shop);
+      }
+    });
   });
 
   return { byId, byName };
+}
+
+async function getOrCreateShop(storeName, shopLookup) {
+  const key = normalizeStoreName(storeName);
+  if (!key) return null;
+
+  const existing = shopLookup.byName.get(key);
+  if (existing) return existing;
+
+  const newShop = await Shop.create({
+    name: storeName,
+    aliases: [storeName],
+    latitude: 0,
+    longitude: 0,
+  });
+
+  shopLookup.byId.set(newShop._id.toString(), newShop);
+  shopLookup.byName.set(key, newShop);
+
+  return newShop;
 }
 
 function normalizeForPersistence(record) {
@@ -782,6 +860,194 @@ async function bulkUpsertRecords(records, sourceType, actorId, sourceFile) {
     modified: result.modifiedCount || 0,
     matched: result.matchedCount || 0,
   };
+}
+
+async function bulkUpsertWeekly2026BRecords(records, actorId, sourceFile, sourceSheet) {
+  if (records.length === 0) {
+    return { upserted: 0, modified: 0, matched: 0 };
+  }
+
+  const ops = records.map((record) => ({
+    updateOne: {
+      filter: {
+        source_sheet: sourceSheet,
+        period_key: record.periodKey,
+        store_key: record.storeKey,
+      },
+      update: {
+        $set: {
+          shop_id: record.shop_id || null,
+          store_name_raw: record.storeName,
+          store_key: record.storeKey,
+          source_sheet: sourceSheet,
+          period_key: record.periodKey,
+          year: record.year,
+          month: record.month,
+          week_number: record.weekNumber,
+          week_start: record.weekStart || null,
+          week_end: record.weekEnd || null,
+          week_range_label: record.weekRangeLabel || null,
+          metrics: record.metrics || {},
+          source_file: sourceFile || null,
+          updated_by: actorId || null,
+        },
+        $setOnInsert: {
+          imported_by: actorId || null,
+        },
+      },
+      upsert: true,
+    },
+  }));
+
+  const result = await StoreReportWeekly2026B.bulkWrite(ops, { ordered: false });
+  return {
+    upserted: result.upsertedCount || 0,
+    modified: result.modifiedCount || 0,
+    matched: result.matchedCount || 0,
+  };
+}
+
+async function bulkUpsertMonthlySale2026Records(records, actorId, sourceFile, sourceSheet) {
+  if (records.length === 0) {
+    return { upserted: 0, modified: 0, matched: 0 };
+  }
+
+  const ops = records.map((record) => ({
+    updateOne: {
+      filter: {
+        source_sheet: sourceSheet,
+        period_key: record.periodKey,
+        store_key: record.storeKey,
+      },
+      update: {
+        $set: {
+          shop_id: record.shop_id || null,
+          store_name_raw: record.storeName,
+          store_key: record.storeKey,
+          source_sheet: sourceSheet,
+          period_key: record.periodKey,
+          year: record.year,
+          month: record.month,
+          metrics: record.metrics || {},
+          source_file: sourceFile || null,
+          updated_by: actorId || null,
+        },
+        $setOnInsert: {
+          imported_by: actorId || null,
+        },
+      },
+      upsert: true,
+    },
+  }));
+
+  const result = await StoreReportMonthlySale2026.bulkWrite(ops, { ordered: false });
+  return {
+    upserted: result.upsertedCount || 0,
+    modified: result.modifiedCount || 0,
+    matched: result.matchedCount || 0,
+  };
+}
+
+function extractWeekly2026BRows(sheetRows, fallbackStoreName, defaultYear) {
+  const entries = [];
+
+  for (let rowIndex = 0; rowIndex < sheetRows.length; rowIndex += 1) {
+    const headerRow = sheetRows[rowIndex] || [];
+    const normalized = headerRow.map(normalizeHeader);
+
+    const weekCol = normalized.findIndex(
+      (header) => header === 'weekending' || header.includes('weekending')
+    );
+    const storeCol = normalized.findIndex((header) => header === 'store');
+
+    if (weekCol < 0) continue;
+
+    let localWeekCounter = 1;
+
+    for (let dataIndex = rowIndex + 1; dataIndex < sheetRows.length; dataIndex += 1) {
+      const dataRow = sheetRows[dataIndex] || [];
+      const weekRangeRaw = normalizeText(dataRow[weekCol]);
+      if (!weekRangeRaw || !weekRangeRaw.toLowerCase().includes('to')) continue;
+
+      const parsedRange = parseWeekRange(weekRangeRaw, defaultYear);
+      if (!parsedRange) continue;
+
+      const weekFromSheet = Number(dataRow[0]);
+      const weekNumber =
+        Number.isFinite(weekFromSheet) && weekFromSheet > 0 ? weekFromSheet : localWeekCounter;
+
+      const storeName =
+        normalizeText(storeCol >= 0 ? dataRow[storeCol] : '') || fallbackStoreName || 'Unknown';
+
+      const skipIndexes = new Set([0, weekCol]);
+      if (storeCol >= 0) skipIndexes.add(storeCol);
+      const metrics = collectDynamicNumericMetrics(dataRow, headerRow, skipIndexes);
+      if (!hasAnyValue(Object.values(metrics))) continue;
+
+      entries.push({
+        storeName,
+        storeKey: normalizeStoreName(storeName) || 'unknown',
+        year: parsedRange.year,
+        month: parsedRange.month,
+        weekNumber,
+        weekStart: parsedRange.weekStart,
+        weekEnd: parsedRange.weekEnd,
+        weekRangeLabel: parsedRange.weekRangeLabel,
+        periodKey: toPeriodKey('weekly_financial', parsedRange.year, parsedRange.month, weekNumber),
+        metrics,
+      });
+
+      localWeekCounter += 1;
+    }
+  }
+
+  return entries;
+}
+
+function extractMonthlySale2026Rows(sheetRows, defaultYear) {
+  const entries = [];
+
+  for (let rowIndex = 0; rowIndex < sheetRows.length; rowIndex += 1) {
+    const headerRow = sheetRows[rowIndex] || [];
+    const normalized = headerRow.map(normalizeHeader);
+
+    const storeCol = normalized.findIndex((header) => header === 'store');
+    const grossSaleCol = normalized.findIndex((header) => header === 'grosssale');
+    const netSaleCol = normalized.findIndex((header) => header === 'netsale');
+
+    if (storeCol < 0 || grossSaleCol < 0 || netSaleCol < 0) continue;
+
+    let activeMonth = null;
+
+    for (let dataIndex = rowIndex + 1; dataIndex < sheetRows.length; dataIndex += 1) {
+      const dataRow = sheetRows[dataIndex] || [];
+      const monthCell = parseMonthLabel(dataRow[0]);
+      if (monthCell) {
+        activeMonth = monthCell;
+      }
+
+      const storeName = normalizeText(dataRow[storeCol]);
+      if (!storeName || isTotalRow(storeName)) continue;
+
+      if (!activeMonth) {
+        activeMonth = { year: Number(defaultYear), month: 1 };
+      }
+
+      const metrics = collectDynamicNumericMetrics(dataRow, headerRow, new Set([0, storeCol]));
+      if (!hasAnyValue(Object.values(metrics))) continue;
+
+      entries.push({
+        storeName,
+        storeKey: normalizeStoreName(storeName) || 'unknown',
+        year: activeMonth.year,
+        month: activeMonth.month,
+        periodKey: `${activeMonth.year}-${String(activeMonth.month).padStart(2, '0')}`,
+        metrics,
+      });
+    }
+  }
+
+  return entries;
 }
 
 function parsePaginationQuery(query) {
@@ -1804,6 +2070,147 @@ const importExcelData = asyncHandler(async (req, res) => {
   });
 });
 
+const importHistoricalWorkbookData = asyncHandler(async (req, res) => {
+  let xlsx;
+  try {
+    xlsx = require('xlsx');
+  } catch {
+    throw new AppError('xlsx dependency is missing. Run npm install.', 500);
+  }
+
+  const filePathInput = req.body?.file_path || path.join('resourse', 'Book1 (1).xlsx');
+  const filePath = path.isAbsolute(filePathInput)
+    ? filePathInput
+    : path.resolve(process.cwd(), filePathInput);
+
+  if (!fs.existsSync(filePath)) {
+    throw new AppError(`Excel file not found at path: ${filePath}`, 400);
+  }
+
+  const year = Number(req.body?.year) || new Date().getUTCFullYear();
+  const weeklyFallbackStoreName =
+    normalizeText(req.body?.weekly_store_name) || normalizeText(req.body?.default_store_name);
+
+  const workbook = xlsx.readFile(filePath, { cellDates: false });
+  const janDecSheetName = resolveSheetName(workbook.SheetNames, HISTORICAL_SHEET_ALIASES.janDec);
+  const weeklySheetName = resolveSheetName(
+    workbook.SheetNames,
+    HISTORICAL_SHEET_ALIASES.weekly2026b
+  );
+  const monthlySheetName = resolveSheetName(
+    workbook.SheetNames,
+    HISTORICAL_SHEET_ALIASES.monthlySale2026
+  );
+
+  const missingSheets = [];
+  if (!janDecSheetName) missingSheets.push(HISTORICAL_SHEET_ALIASES.janDec[0]);
+  if (!weeklySheetName) missingSheets.push(HISTORICAL_SHEET_ALIASES.weekly2026b[0]);
+  if (!monthlySheetName) missingSheets.push(HISTORICAL_SHEET_ALIASES.monthlySale2026[0]);
+
+  if (missingSheets.length > 0) {
+    throw new AppError(`Required sheet(s) not found: ${missingSheets.join(', ')}`, 400);
+  }
+
+  const shopLookup = await buildShopLookup();
+  const rowErrors = [];
+
+  const janDecRows = xlsx.utils.sheet_to_json(workbook.Sheets[janDecSheetName], {
+    header: 1,
+    raw: false,
+    defval: '',
+  });
+  const janDecEntries = [
+    ...extractWeeklyRows(janDecRows, janDecSheetName, year),
+    ...extractMonthlyRows(janDecRows, year),
+  ];
+
+  const storeReportEntryRecords = [];
+  janDecEntries.forEach((row, index) => {
+    const shop = shopLookup.byName.get(normalizeStoreName(row.storeName));
+    if (!shop) {
+      rowErrors.push({
+        sheet: janDecSheetName,
+        row: index + 1,
+        storeName: row.storeName,
+        reason: 'Store name does not match any existing shop for StoreReportEntry import',
+      });
+      return;
+    }
+
+    normalizeForPersistence({
+      ...row,
+      shop_id: shop._id,
+    }).forEach((segment) => storeReportEntryRecords.push(segment));
+  });
+
+  const weeklyRows = xlsx.utils.sheet_to_json(workbook.Sheets[weeklySheetName], {
+    header: 1,
+    raw: false,
+    defval: '',
+  });
+  const weeklyEntries = extractWeekly2026BRows(weeklyRows, weeklyFallbackStoreName, year);
+  const weeklyRecords = [];
+  for (const row of weeklyEntries) {
+    const shop = await getOrCreateShop(row.storeName, shopLookup);
+    weeklyRecords.push({
+      ...row,
+      shop_id: shop?._id || null,
+    });
+  }
+
+  const monthlyRows = xlsx.utils.sheet_to_json(workbook.Sheets[monthlySheetName], {
+    header: 1,
+    raw: false,
+    defval: '',
+  });
+  const monthlyEntries = extractMonthlySale2026Rows(monthlyRows, year);
+  const monthlyRecords = [];
+  for (const row of monthlyEntries) {
+    const shop = await getOrCreateShop(row.storeName, shopLookup);
+    monthlyRecords.push({
+      ...row,
+      shop_id: shop?._id || null,
+    });
+  }
+
+  const [janDecResult, weeklyResult, monthlyResult] = await Promise.all([
+    bulkUpsertRecords(storeReportEntryRecords, 'excel_raw', req.user?._id, filePath),
+    bulkUpsertWeekly2026BRecords(weeklyRecords, req.user?._id, filePath, weeklySheetName),
+    bulkUpsertMonthlySale2026Records(monthlyRecords, req.user?._id, filePath, monthlySheetName),
+  ]);
+
+  return sendSuccess(res, 'Historical workbook data imported successfully', {
+    file_path: filePath,
+    sheets: {
+      jan_dec_26: janDecSheetName,
+      weekly_2026b: weeklySheetName,
+      monthly_sale_2026: monthlySheetName,
+    },
+    imported: {
+      store_report_entry: janDecResult.upserted + janDecResult.modified,
+      weekly_2026b: weeklyResult.upserted + weeklyResult.modified,
+      monthly_sale_2026: monthlyResult.upserted + monthlyResult.modified,
+    },
+    upserted: {
+      store_report_entry: janDecResult.upserted,
+      weekly_2026b: weeklyResult.upserted,
+      monthly_sale_2026: monthlyResult.upserted,
+    },
+    updated: {
+      store_report_entry: janDecResult.modified,
+      weekly_2026b: weeklyResult.modified,
+      monthly_sale_2026: monthlyResult.modified,
+    },
+    matched: {
+      store_report_entry: janDecResult.matched,
+      weekly_2026b: weeklyResult.matched,
+      monthly_sale_2026: monthlyResult.matched,
+    },
+    failed: rowErrors.length,
+    errors: rowErrors,
+  });
+});
+
 const upsertAdminWeeklyData = asyncHandler(async (req, res) => {
   const entries = Array.isArray(req.body?.entries) ? req.body.entries : [];
   if (entries.length === 0) {
@@ -2120,8 +2527,404 @@ const getStoreReportDashboardAnalytics = asyncHandler(async (req, res) => {
   });
 });
 
+// ---------- Weekly 2026B CRUD ----------
+
+const getWeekly2026 = asyncHandler(async (req, res) => {
+  const filter = {};
+  if (req.query.year) filter.year = Number(req.query.year);
+  if (req.query.month) filter.month = Number(req.query.month);
+  if (req.query.week_number) filter.week_number = Number(req.query.week_number);
+  if (req.query.store_key) filter.store_key = req.query.store_key;
+
+  const shopScope = buildShopScope(req.user);
+  if (req.query.shop_id) {
+    if (!shopScope.all && !isShopAllowed(shopScope, req.query.shop_id)) {
+      const pageMeta = toPageMeta(0, 1, 20, 0);
+      return sendSuccess(res, 'Weekly 2026 records fetched', {
+        rows: [],
+        count: 0,
+        pagination: { enabled: true, basis: 'row', ...pageMeta, page_count: pageMeta.total_pages, has_next: false, has_prev: false },
+      });
+    }
+    filter.shop_id = req.query.shop_id;
+  } else if (!shopScope.all) {
+    if (shopScope.ids.length === 0) {
+      const pageMeta = toPageMeta(0, 1, 20, 0);
+      return sendSuccess(res, 'Weekly 2026 records fetched', {
+        rows: [],
+        count: 0,
+        pagination: { enabled: true, basis: 'row', ...pageMeta, page_count: pageMeta.total_pages, has_next: false, has_prev: false },
+      });
+    }
+    filter.shop_id = { $in: shopScope.ids };
+  }
+
+  const { page, limit, skip } = parsePaginationQuery(req.query);
+  const sort = { year: -1, month: -1, week_number: -1 };
+
+  const [total, rows] = await Promise.all([
+    StoreReportWeekly2026B.countDocuments(filter),
+    StoreReportWeekly2026B.find(filter)
+      .populate('shop_id', 'name')
+      .sort(sort)
+      .skip(skip)
+      .limit(limit),
+  ]);
+
+  const pageMeta = toPageMeta(total, page, limit, rows.length);
+
+  return sendSuccess(res, 'Weekly 2026 records fetched', {
+    rows,
+    count: total,
+    pagination: {
+      enabled: true,
+      basis: 'row',
+      ...pageMeta,
+      page_count: pageMeta.total_pages,
+      has_next: pageMeta.page < pageMeta.total_pages,
+      has_prev: pageMeta.page > 1,
+    },
+  });
+});
+
+const upsertSingleWeekly2026 = asyncHandler(async (req, res) => {
+  const {
+    store_name,
+    shop_id: inputShopId,
+    year,
+    month,
+    week_number,
+    week_range_label,
+    metrics,
+    source_sheet,
+  } = req.body;
+
+  if (!year || !month || !week_number) {
+    throw new AppError('year, month, and week_number are required', 400);
+  }
+  if (!metrics || typeof metrics !== 'object') {
+    throw new AppError('metrics object is required', 400);
+  }
+  if (!store_name && !inputShopId) {
+    throw new AppError('store_name or shop_id is required', 400);
+  }
+
+  const shopLookup = await buildShopLookup();
+  let shop = null;
+
+  if (inputShopId) {
+    shop = shopLookup.byId.get(String(inputShopId));
+  } else if (store_name) {
+    shop = await getOrCreateShop(store_name, shopLookup);
+  }
+
+  const storeName = store_name || (shop ? shop.name : 'Unknown');
+  const storeKey = normalizeStoreName(storeName) || 'unknown';
+  const sheet = normalizeText(source_sheet) || 'Weekly 2026';
+  const yr = Number(year);
+  const mo = Number(month);
+  const wn = Number(week_number);
+  const periodKey = toPeriodKey('weekly_financial', yr, mo, wn);
+
+  let weekStart = null;
+  let weekEnd = null;
+  let weekRangeLabel = normalizeText(week_range_label) || null;
+
+  if (weekRangeLabel) {
+    const parsed = parseWeekRange(weekRangeLabel, yr);
+    if (parsed) {
+      weekStart = parsed.weekStart;
+      weekEnd = parsed.weekEnd;
+      weekRangeLabel = parsed.weekRangeLabel;
+    }
+  }
+
+  const record = await StoreReportWeekly2026B.findOneAndUpdate(
+    { source_sheet: sheet, period_key: periodKey, store_key: storeKey },
+    {
+      $set: {
+        shop_id: shop?._id || null,
+        store_name_raw: storeName,
+        store_key: storeKey,
+        source_sheet: sheet,
+        period_key: periodKey,
+        year: yr,
+        month: mo,
+        week_number: wn,
+        week_start: weekStart,
+        week_end: weekEnd,
+        week_range_label: weekRangeLabel,
+        metrics,
+        updated_by: req.user?._id || null,
+      },
+      $setOnInsert: {
+        imported_by: req.user?._id || null,
+      },
+    },
+    { upsert: true, returnDocument: 'after', runValidators: true }
+  );
+
+  return sendSuccess(res, 'Weekly 2026 record upserted', { record }, 200);
+});
+
+// ---------- Monthly Sale 2026 CRUD ----------
+
+const getMonthlySale2026 = asyncHandler(async (req, res) => {
+  const filter = {};
+  if (req.query.year) filter.year = Number(req.query.year);
+  if (req.query.month) filter.month = Number(req.query.month);
+  if (req.query.store_key) filter.store_key = req.query.store_key;
+
+  const shopScope = buildShopScope(req.user);
+  if (req.query.shop_id) {
+    if (!shopScope.all && !isShopAllowed(shopScope, req.query.shop_id)) {
+      const pageMeta = toPageMeta(0, 1, 20, 0);
+      return sendSuccess(res, 'Monthly Sale 2026 records fetched', {
+        rows: [],
+        count: 0,
+        pagination: { enabled: true, basis: 'row', ...pageMeta, page_count: pageMeta.total_pages, has_next: false, has_prev: false },
+      });
+    }
+    filter.shop_id = req.query.shop_id;
+  } else if (!shopScope.all) {
+    if (shopScope.ids.length === 0) {
+      const pageMeta = toPageMeta(0, 1, 20, 0);
+      return sendSuccess(res, 'Monthly Sale 2026 records fetched', {
+        rows: [],
+        count: 0,
+        pagination: { enabled: true, basis: 'row', ...pageMeta, page_count: pageMeta.total_pages, has_next: false, has_prev: false },
+      });
+    }
+    filter.shop_id = { $in: shopScope.ids };
+  }
+
+  const { page, limit, skip } = parsePaginationQuery(req.query);
+  const sort = { year: -1, month: -1 };
+
+  const [total, rows] = await Promise.all([
+    StoreReportMonthlySale2026.countDocuments(filter),
+    StoreReportMonthlySale2026.find(filter)
+      .populate('shop_id', 'name')
+      .sort(sort)
+      .skip(skip)
+      .limit(limit),
+  ]);
+
+  const pageMeta = toPageMeta(total, page, limit, rows.length);
+
+  return sendSuccess(res, 'Monthly Sale 2026 records fetched', {
+    rows,
+    count: total,
+    pagination: {
+      enabled: true,
+      basis: 'row',
+      ...pageMeta,
+      page_count: pageMeta.total_pages,
+      has_next: pageMeta.page < pageMeta.total_pages,
+      has_prev: pageMeta.page > 1,
+    },
+  });
+});
+
+const upsertSingleMonthlySale2026 = asyncHandler(async (req, res) => {
+  const {
+    store_name,
+    shop_id: inputShopId,
+    year,
+    month,
+    metrics,
+    source_sheet,
+  } = req.body;
+
+  if (!year || !month) {
+    throw new AppError('year and month are required', 400);
+  }
+  if (!metrics || typeof metrics !== 'object') {
+    throw new AppError('metrics object is required', 400);
+  }
+  if (!store_name && !inputShopId) {
+    throw new AppError('store_name or shop_id is required', 400);
+  }
+
+  const shopLookup = await buildShopLookup();
+  let shop = null;
+
+  if (inputShopId) {
+    shop = shopLookup.byId.get(String(inputShopId));
+  } else if (store_name) {
+    shop = await getOrCreateShop(store_name, shopLookup);
+  }
+
+  const storeName = store_name || (shop ? shop.name : 'Unknown');
+  const storeKey = normalizeStoreName(storeName) || 'unknown';
+  const sheet = normalizeText(source_sheet) || 'Monthly Sale 2026';
+  const yr = Number(year);
+  const mo = Number(month);
+  const periodKey = `${yr}-${String(mo).padStart(2, '0')}`;
+
+  const record = await StoreReportMonthlySale2026.findOneAndUpdate(
+    { source_sheet: sheet, period_key: periodKey, store_key: storeKey },
+    {
+      $set: {
+        shop_id: shop?._id || null,
+        store_name_raw: storeName,
+        store_key: storeKey,
+        source_sheet: sheet,
+        period_key: periodKey,
+        year: yr,
+        month: mo,
+        metrics,
+        updated_by: req.user?._id || null,
+      },
+      $setOnInsert: {
+        imported_by: req.user?._id || null,
+      },
+    },
+    { upsert: true, returnDocument: 'after', runValidators: true }
+  );
+
+  return sendSuccess(res, 'Monthly Sale 2026 record upserted', { record }, 200);
+});
+
+// ---------- Excel Export ----------
+
+const MONTH_NAMES = [
+  '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+];
+
+const exportExcel = asyncHandler(async (req, res) => {
+  let xlsx;
+  try {
+    xlsx = require('xlsx');
+  } catch {
+    throw new AppError('xlsx package is not installed', 500);
+  }
+
+  const filter = {};
+  if (req.query.year) filter.year = Number(req.query.year);
+  if (req.query.month) filter.month = Number(req.query.month);
+  if (req.query.store_key) filter.store_key = req.query.store_key;
+
+  const shopScope = buildShopScope(req.user);
+  if (req.query.shop_id) {
+    if (!shopScope.all && !isShopAllowed(shopScope, req.query.shop_id)) {
+      throw new AppError('You do not have access to this shop', 403);
+    }
+    filter.shop_id = req.query.shop_id;
+  } else if (!shopScope.all) {
+    if (shopScope.ids.length === 0) {
+      throw new AppError('No shops available for export', 403);
+    }
+    filter.shop_id = { $in: shopScope.ids };
+  }
+
+  const requestedSheets = req.query.sheets
+    ? req.query.sheets.split(',').map((s) => s.trim().toLowerCase())
+    : ['weekly', 'monthly'];
+
+  const wb = xlsx.utils.book_new();
+  let sheetsAdded = 0;
+
+  // ---- Weekly Sheet ----
+  if (requestedSheets.includes('weekly')) {
+    const weeklyRecords = await StoreReportWeekly2026B.find(filter)
+      .populate('shop_id', 'name')
+      .sort({ year: 1, month: 1, week_number: 1, store_key: 1 })
+      .lean();
+
+    if (weeklyRecords.length > 0) {
+      const allMetricKeys = new Set();
+      weeklyRecords.forEach((r) => {
+        Object.keys(r.metrics || {}).forEach((k) => allMetricKeys.add(k));
+      });
+      const metricCols = Array.from(allMetricKeys);
+
+      const header = ['Week #', 'Week Ending', 'Store', ...metricCols];
+      const rows = [header];
+
+      weeklyRecords.forEach((r) => {
+        const row = [
+          r.week_number,
+          r.week_range_label || '',
+          r.store_name_raw || '',
+        ];
+        metricCols.forEach((key) => {
+          row.push(r.metrics?.[key] ?? '');
+        });
+        rows.push(row);
+      });
+
+      const ws = xlsx.utils.aoa_to_sheet(rows);
+      xlsx.utils.book_append_sheet(wb, ws, 'Weekly');
+      sheetsAdded += 1;
+    }
+  }
+
+  // ---- Monthly Sale Sheet ----
+  if (requestedSheets.includes('monthly')) {
+    const monthlyRecords = await StoreReportMonthlySale2026.find(filter)
+      .populate('shop_id', 'name')
+      .sort({ year: 1, month: 1, store_key: 1 })
+      .lean();
+
+    if (monthlyRecords.length > 0) {
+      const allMetricKeys = new Set();
+      monthlyRecords.forEach((r) => {
+        Object.keys(r.metrics || {}).forEach((k) => allMetricKeys.add(k));
+      });
+      const metricCols = Array.from(allMetricKeys);
+
+      const header = ['Month', 'Store', ...metricCols];
+      const rows = [header];
+
+      let lastMonthLabel = '';
+      monthlyRecords.forEach((r) => {
+        const yr = r.year % 100;
+        const monthLabel = `${MONTH_NAMES[r.month] || r.month}-${String(yr).padStart(2, '0')}`;
+
+        if (monthLabel !== lastMonthLabel) {
+          const separatorRow = [monthLabel];
+          for (let i = 1; i < header.length; i++) separatorRow.push('');
+          rows.push(separatorRow);
+          lastMonthLabel = monthLabel;
+        }
+
+        const row = [
+          '',
+          r.store_name_raw || '',
+        ];
+        metricCols.forEach((key) => {
+          row.push(r.metrics?.[key] ?? '');
+        });
+        rows.push(row);
+      });
+
+      const ws = xlsx.utils.aoa_to_sheet(rows);
+      xlsx.utils.book_append_sheet(wb, ws, 'Monthly Sale');
+      sheetsAdded += 1;
+    }
+  }
+
+  if (sheetsAdded === 0) {
+    const emptyWs = xlsx.utils.aoa_to_sheet([['No data found for the given filters']]);
+    xlsx.utils.book_append_sheet(wb, emptyWs, 'Info');
+  }
+
+  const yearLabel = req.query.year || 'all';
+  const filename = `store_report_${yearLabel}.xlsx`;
+
+  const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Length', buffer.length);
+  return res.send(buffer);
+});
+
 module.exports = {
   importExcelData,
+  importHistoricalWorkbookData,
   upsertAdminWeeklyData,
   getStoreReportTable,
   getStoreReportAnalyticsSummary,
@@ -2129,4 +2932,9 @@ module.exports = {
   getStoreReportAnalyticsTrends,
   getStoreReportAnalyticsSalesChart,
   getStoreReportDashboardAnalytics,
+  getWeekly2026,
+  upsertSingleWeekly2026,
+  getMonthlySale2026,
+  upsertSingleMonthlySale2026,
+  exportExcel,
 };

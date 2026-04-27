@@ -82,6 +82,7 @@ const seedTestData = async () => {
   const shops = await Shop.insertMany([
     {
       name: 'Main Branch',
+      aliases: ['Baker St', 'BAKER ST'],
       latitude: 51.5074,
       longitude: -0.1278,
       geofence_radius_m: 150,
@@ -90,6 +91,7 @@ const seedTestData = async () => {
     },
     {
       name: 'East Branch',
+      aliases: ['Camden', 'Camden Town'],
       latitude: 51.5155,
       longitude: -0.0922,
       geofence_radius_m: 100,

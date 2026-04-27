@@ -99,6 +99,35 @@ describe('Shops module integration', () => {
     expect(Array.isArray(historyRes.body.data.history)).toBe(true);
   });
 
+  it('SHOP-009: admin can set shift caps and overnight operating hours', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+
+    const updateCapsRes = await request(app)
+      .put(`/api/shops/${fixtures.shops.mainShop._id}`)
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .send({
+        min_shift_duration_hours: 2,
+        max_shift_duration_hours: 8,
+      });
+
+    expectEnvelope(updateCapsRes, 200);
+    expect(updateCapsRes.body.data.shop.min_shift_duration_hours).toBe(2);
+    expect(updateCapsRes.body.data.shop.max_shift_duration_hours).toBe(8);
+
+    const overnightRes = await request(app)
+      .put(`/api/shops/${fixtures.shops.mainShop._id}/hours`)
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .send({
+        opening_time: '07:00',
+        closing_time: '05:00',
+        note: 'Overnight schedule',
+      });
+
+    expectEnvelope(overnightRes, 200);
+    expect(overnightRes.body.data.shop.opening_time).toBe('07:00');
+    expect(overnightRes.body.data.shop.closing_time).toBe('05:00');
+  });
+
   it('SHOP-008: staff cannot update or read shop-hours history', async () => {
     const staffLogin = await login('staff@org.com', 'Staff@1234');
 

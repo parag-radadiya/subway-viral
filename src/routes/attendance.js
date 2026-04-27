@@ -15,6 +15,7 @@ const {
   applyClosedAttendanceAdjustment,
   bulkAdjustClosedAttendanceByShop,
   getUnchangedUsersForRange,
+  getWeeklyPayrollReport,
 } = require('../controllers/attendanceController');
 const { protect } = require('../middleware/authMiddleware');
 const { requirePermission } = require('../middleware/permMiddleware');
@@ -490,5 +491,42 @@ router.get('/range', protect, getAttendanceByDateRange);
  *                 data: { type: array, items: { $ref: '#/components/schemas/Attendance' } }
  */
 router.get('/', protect, getAttendance);
+
+/**
+ * @swagger
+ * /api/attendance/weekly-payroll-report:
+ *   get:
+ *     summary: Get structured Weekly Payroll Report exactly matching the printer PDF
+ *     tags: [Attendance]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: shop_id
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: from_date
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: date
+ *       - in: query
+ *         name: to_date
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: date
+ *     responses:
+ *       200:
+ *         description: Structured payroll report matching the PDF layout
+ */
+router.get(
+  '/weekly-payroll-report',
+  protect,
+  requirePermission('can_view_all_staff'),
+  getWeeklyPayrollReport
+);
 
 module.exports = router;
