@@ -1003,11 +1003,9 @@ describe('Store reports integration', () => {
       const importRes = await request(app)
         .post('/api/store-reports/import-historical-workbook')
         .set('Authorization', `Bearer ${adminLogin.token}`)
-        .send({
-          file_path: tempFilePath,
-          year: 2026,
-          weekly_store_name: fixtures.shops.mainShop.name,
-        });
+        .attach('file', tempFilePath)
+        .field('year', '2026')
+        .field('weekly_store_name', fixtures.shops.mainShop.name);
 
       expectEnvelope(importRes, 200);
       expect(importRes.body.data.imported.store_report_entry).toBeGreaterThan(0);
@@ -1023,11 +1021,9 @@ describe('Store reports integration', () => {
       const secondImportRes = await request(app)
         .post('/api/store-reports/import-historical-workbook')
         .set('Authorization', `Bearer ${adminLogin.token}`)
-        .send({
-          file_path: tempFilePath,
-          year: 2026,
-          weekly_store_name: fixtures.shops.mainShop.name,
-        });
+        .attach('file', tempFilePath)
+        .field('year', '2026')
+        .field('weekly_store_name', fixtures.shops.mainShop.name);
 
       expectEnvelope(secondImportRes, 200);
       expect(await StoreReportWeekly2026B.countDocuments()).toBe(1);
@@ -1254,7 +1250,8 @@ describe('Store reports integration', () => {
       const importRes = await request(app)
         .post('/api/store-reports/import-historical-workbook')
         .set('Authorization', `Bearer ${adminLogin.token}`)
-        .send({ file_path: testFile, year: 2026 });
+        .attach('file', testFile)
+        .field('year', '2026');
 
       expectEnvelope(importRes, 200);
 
