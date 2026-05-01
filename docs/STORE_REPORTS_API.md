@@ -63,14 +63,56 @@ Bulk import from a workbook containing 3 sheets: `Jan-Dec 26`, `Weekly 2026`, `M
 
 > **Auto-creates shops** for unmatched store names with default values.
 
+### Using cURL (File Upload)
+
 ```bash
 curl -X POST http://localhost:5000/api/store-reports/import-historical-workbook \
   -H "Authorization: Bearer YOUR_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "file_path": "/path/to/Book1.xlsx"
-  }'
+  -F "file=@Book1.xlsx" \
+  -F "year=2026" \
+  -F "weekly_store_name=Main Branch"
 ```
+
+### Using Postman
+
+1. Set request type to **POST**
+2. URL: `http://localhost:5000/api/store-reports/import-historical-workbook`
+3. Go to **Headers** and add:
+   - `Authorization: Bearer YOUR_TOKEN`
+4. Go to **Body** tab and select **form-data**
+5. Add the following fields:
+   - `file` (type: **File**) → Select your Excel file
+   - `year` (type: **Text**) → `2026`
+   - `weekly_store_name` (type: **Text**) → `Main Branch` (optional)
+
+### Using JavaScript/Fetch
+
+```javascript
+const formData = new FormData();
+formData.append('file', fileInputElement.files[0]);
+formData.append('year', 2026);
+formData.append('weekly_store_name', 'Main Branch');
+
+const response = await fetch('http://localhost:5000/api/store-reports/import-historical-workbook', {
+  method: 'POST',
+  headers: {
+    Authorization: `Bearer ${token}`,
+  },
+  body: formData,
+});
+
+const data = await response.json();
+console.log(data);
+```
+
+### Request Parameters
+
+| Field                | Type   | Required | Description                                             |
+| -------------------- | ------ | -------- | ------------------------------------------------------- |
+| `file`               | File   | Yes      | Excel workbook (.xlsx or .xls) with required sheets     |
+| `year`               | number | No       | Year to use for records (default: current year)         |
+| `weekly_store_name`  | string | No       | Fallback store name for Weekly sheet when not in column |
+| `default_store_name` | string | No       | Alternative name for fallback store                     |
 
 **Example Response:**
 
@@ -79,7 +121,8 @@ curl -X POST http://localhost:5000/api/store-reports/import-historical-workbook 
   "status": 200,
   "message": "Historical workbook data imported successfully",
   "data": {
-    "file_path": "/path/to/Book1.xlsx",
+    "file_name": "Book1.xlsx",
+    "file_size": 245678,
     "sheets": {
       "jan_dec_26": "Jan-Dec 26",
       "weekly_2026b": "Weekly 2026",
@@ -95,9 +138,39 @@ curl -X POST http://localhost:5000/api/store-reports/import-historical-workbook 
       "weekly_2026b": 52,
       "monthly_sale_2026": 342
     },
+    "updated": {
+      "store_report_entry": 0,
+      "weekly_2026b": 0,
+      "monthly_sale_2026": 0
+    },
+    "matched": {
+      "store_report_entry": 0,
+      "weekly_2026b": 0,
+      "monthly_sale_2026": 0
+    },
     "failed": 0,
     "errors": []
   }
+}
+```
+
+**Error Response (No File Provided):**
+
+```json
+{
+  "status": 400,
+  "message": "Excel file is required. Please upload a file.",
+  "data": {}
+}
+```
+
+**Error Response (Invalid Excel Format):**
+
+```json
+{
+  "status": 400,
+  "message": "Failed to parse Excel file: ...",
+  "data": {}
 }
 ```
 

@@ -1,4 +1,5 @@
 const express = require('express');
+const multer = require('multer');
 const {
   importExcelData,
   importHistoricalWorkbookData,
@@ -20,11 +21,31 @@ const { requirePermission } = require('../middleware/permMiddleware');
 
 const router = express.Router();
 
+// Configure multer for file uploads
+// Store files in memory for processing
+const upload = multer({
+  storage: multer.memoryStorage(),
+  fileFilter: (req, file, cb) => {
+    // Only accept Excel files
+    const allowedMimes = [
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-excel',
+    ];
+    if (allowedMimes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only Excel files (.xlsx, .xls) are allowed'));
+    }
+  },
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+});
+
 router.post('/import-excel', protect, requirePermission('can_manage_rotas'), importExcelData);
 router.post(
   '/import-historical-workbook',
   protect,
   requirePermission('can_manage_rotas'),
+  upload.single('file'),
   importHistoricalWorkbookData
 );
 router.post('/admin-weekly', protect, requirePermission('can_manage_rotas'), upsertAdminWeeklyData);

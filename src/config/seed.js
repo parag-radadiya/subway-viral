@@ -102,24 +102,24 @@ const seed = async () => {
   console.log(`✅ ${roles.length} roles created`);
 
   // ─── 2. Shops ─────────────────────────────────────────
-  const shops = await Shop.insertMany([
-    {
-      name: 'Main Branch',
-      latitude: 51.5074,
-      longitude: -0.1278,
-      geofence_radius_m: 150,
-      opening_time: '08:00',
-      closing_time: '22:00',
-    },
-    {
-      name: 'East Branch',
-      latitude: 51.5155,
-      longitude: -0.0922,
-      geofence_radius_m: 100,
-      opening_time: '08:00',
-      closing_time: '22:00',
-    },
-  ]);
+  // const shops = await Shop.insertMany([
+  //   {
+  //     name: 'Main Branch',
+  //     latitude: 51.5074,
+  //     longitude: -0.1278,
+  //     geofence_radius_m: 150,
+  //     opening_time: '08:00',
+  //     closing_time: '22:00',
+  //   },
+  //   {
+  //     name: 'East Branch',
+  //     latitude: 51.5155,
+  //     longitude: -0.0922,
+  //     geofence_radius_m: 100,
+  //     opening_time: '08:00',
+  //     closing_time: '22:00',
+  //   },
+  // ]);
   const mainShop = shops[0];
   const eastShop = shops[1];
   console.log(`✅ ${shops.length} shops created`);
@@ -200,59 +200,59 @@ const seed = async () => {
   const staffUser = users[4];
   console.log(`✅ ${users.length} users created`);
 
-  // ─── 4. Rotas ─────────────────────────────────────────
-  const today = new Date();
-  const tomorrow = new Date(today);
-  tomorrow.setDate(today.getDate() + 1);
-
-  await Rota.insertMany([
-    {
-      user_id: staffUser._id,
-      shop_id: mainShop._id,
-      shift_date: today,
-      start_time: '09:00',
-    },
-    {
-      user_id: staffUser._id,
-      shop_id: eastShop._id,
-      shift_date: tomorrow,
-      start_time: '10:00',
-    },
-  ]);
-  console.log('✅ 2 rotas created');
-
-  // ─── 5. Inventory Items ───────────────────────────────
-  await InventoryItem.insertMany([
-    {
-      shop_id: mainShop._id,
-      item_name: 'Cash Register',
-      purchase_date: new Date('2024-01-15'),
-      expiry_date: null,
-      status: 'Good',
-    },
-    {
-      shop_id: mainShop._id,
-      item_name: 'Barcode Scanner',
-      purchase_date: new Date('2023-06-10'),
-      expiry_date: null,
-      status: 'Good',
-    },
-    {
-      shop_id: eastShop._id,
-      item_name: 'Display Monitor',
-      purchase_date: new Date('2022-11-20'),
-      expiry_date: null,
-      status: 'Good',
-    },
-    {
-      shop_id: eastShop._id,
-      item_name: 'Fire Extinguisher',
-      purchase_date: new Date('2023-03-01'),
-      expiry_date: new Date('2026-03-01'),
-      status: 'Good',
-    },
-  ]);
-  console.log('✅ 4 inventory items created');
+  // // ─── 4. Rotas ─────────────────────────────────────────
+  // const today = new Date();
+  // const tomorrow = new Date(today);
+  // tomorrow.setDate(today.getDate() + 1);
+  //
+  // await Rota.insertMany([
+  //   {
+  //     user_id: staffUser._id,
+  //     shop_id: mainShop._id,
+  //     shift_date: today,
+  //     start_time: '09:00',
+  //   },
+  //   {
+  //     user_id: staffUser._id,
+  //     shop_id: eastShop._id,
+  //     shift_date: tomorrow,
+  //     start_time: '10:00',
+  //   },
+  // ]);
+  // console.log('✅ 2 rotas created');
+  //
+  // // ─── 5. Inventory Items ───────────────────────────────
+  // await InventoryItem.insertMany([
+  //   {
+  //     shop_id: mainShop._id,
+  //     item_name: 'Cash Register',
+  //     purchase_date: new Date('2024-01-15'),
+  //     expiry_date: null,
+  //     status: 'Good',
+  //   },
+  //   {
+  //     shop_id: mainShop._id,
+  //     item_name: 'Barcode Scanner',
+  //     purchase_date: new Date('2023-06-10'),
+  //     expiry_date: null,
+  //     status: 'Good',
+  //   },
+  //   {
+  //     shop_id: eastShop._id,
+  //     item_name: 'Display Monitor',
+  //     purchase_date: new Date('2022-11-20'),
+  //     expiry_date: null,
+  //     status: 'Good',
+  //   },
+  //   {
+  //     shop_id: eastShop._id,
+  //     item_name: 'Fire Extinguisher',
+  //     purchase_date: new Date('2023-03-01'),
+  //     expiry_date: new Date('2026-03-01'),
+  //     status: 'Good',
+  //   },
+  // ]);
+  // console.log('✅ 4 inventory items created');
 
   // ─── Summary ──────────────────────────────────────────
   console.log('\n🎉 Seed complete! Default credentials:\n');

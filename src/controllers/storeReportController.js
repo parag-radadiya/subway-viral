@@ -2078,20 +2078,26 @@ const importHistoricalWorkbookData = asyncHandler(async (req, res) => {
     throw new AppError('xlsx dependency is missing. Run npm install.', 500);
   }
 
-  const filePathInput = req.body?.file_path || path.join('resourse', 'Book1 (1).xlsx');
-  const filePath = path.isAbsolute(filePathInput)
-    ? filePathInput
-    : path.resolve(process.cwd(), filePathInput);
-
-  if (!fs.existsSync(filePath)) {
-    throw new AppError(`Excel file not found at path: ${filePath}`, 400);
+  // Handle file upload - check if file is provided in request
+  if (!req.file) {
+    throw new AppError('Excel file is required. Please upload a file.', 400);
   }
 
   const year = Number(req.body?.year) || new Date().getUTCFullYear();
   const weeklyFallbackStoreName =
     normalizeText(req.body?.weekly_store_name) || normalizeText(req.body?.default_store_name);
 
-  const workbook = xlsx.readFile(filePath, { cellDates: false });
+  // Read the Excel file from buffer (uploaded file)
+  let workbook;
+  try {
+    workbook = xlsx.read(req.file.buffer, { cellDates: false });
+  } catch (error) {
+    throw new AppError(
+      `Failed to parse Excel file: ${error.message}. Please ensure it's a valid Excel file.`,
+      400
+    );
+  }
+
   const janDecSheetName = resolveSheetName(workbook.SheetNames, HISTORICAL_SHEET_ALIASES.janDec);
   const weeklySheetName = resolveSheetName(
     workbook.SheetNames,
@@ -2174,13 +2180,24 @@ const importHistoricalWorkbookData = asyncHandler(async (req, res) => {
   }
 
   const [janDecResult, weeklyResult, monthlyResult] = await Promise.all([
-    bulkUpsertRecords(storeReportEntryRecords, 'excel_raw', req.user?._id, filePath),
-    bulkUpsertWeekly2026BRecords(weeklyRecords, req.user?._id, filePath, weeklySheetName),
-    bulkUpsertMonthlySale2026Records(monthlyRecords, req.user?._id, filePath, monthlySheetName),
+    bulkUpsertRecords(storeReportEntryRecords, 'excel_raw', req.user?._id, req.file.originalname),
+    bulkUpsertWeekly2026BRecords(
+      weeklyRecords,
+      req.user?._id,
+      req.file.originalname,
+      weeklySheetName
+    ),
+    bulkUpsertMonthlySale2026Records(
+      monthlyRecords,
+      req.user?._id,
+      req.file.originalname,
+      monthlySheetName
+    ),
   ]);
 
   return sendSuccess(res, 'Historical workbook data imported successfully', {
-    file_path: filePath,
+    file_name: req.file.originalname,
+    file_size: req.file.size,
     sheets: {
       jan_dec_26: janDecSheetName,
       weekly_2026b: weeklySheetName,
