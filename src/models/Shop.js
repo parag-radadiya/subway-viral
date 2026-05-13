@@ -105,6 +105,18 @@ const shopSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// Computed convenience field: true when closing_time is earlier than opening_time
+// (i.e. the shop closes on the next calendar day). Included in all JSON responses.
+shopSchema.virtual('closes_next_day').get(function () {
+  const open = toMinutes(this.opening_time);
+  const close = toMinutes(this.closing_time);
+  if (Number.isNaN(open) || Number.isNaN(close)) return false;
+  return close < open;
+});
+
+shopSchema.set('toJSON', { virtuals: true });
+shopSchema.set('toObject', { virtuals: true });
+
 shopSchema.pre('validate', function () {
   if (!this.opening_time || !this.closing_time) return;
   if (!HHMM_RE.test(this.opening_time) || !HHMM_RE.test(this.closing_time)) return;

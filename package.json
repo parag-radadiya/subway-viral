@@ -9,6 +9,7 @@
     "seed:bulk-adjust-test": "node src/config/seedBulkAdjustTestData.js",
     "seed:store-reports-dummy": "node src/config/seedStoreReportsDummyData.js",
     "migrate:attendance-adjust-permission": "node src/config/migrations/grantAttendanceAdjustPermission.js",
+    "migrate:overnight-shop-hours": "node src/config/migrations/setOvernightShopHours.js",
     "test": "jest --runInBand",
     "test:watch": "jest --watch",
     "test:ci": "jest --runInBand --coverage",
