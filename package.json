@@ -8,6 +8,7 @@
     "seed": "node src/config/seed.js",
     "seed:bulk-adjust-test": "node src/config/seedBulkAdjustTestData.js",
     "seed:store-reports-dummy": "node src/config/seedStoreReportsDummyData.js",
+    "seed:historical": "node src/config/seedHistoricalData.js",
     "migrate:attendance-adjust-permission": "node src/config/migrations/grantAttendanceAdjustPermission.js",
     "test": "jest --runInBand",
     "test:watch": "jest --watch",
