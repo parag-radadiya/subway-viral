@@ -109,6 +109,20 @@ function eachUtcDay(startDate, endDate) {
   return days;
 }
 
+// When closing_time < opening_time the shop's operating window for the last
+// day in a range extends past midnight into the next calendar day.
+// This helper computes the true end of coverage for a given rangeEnd.
+function overnightEffectiveRangeEnd(shop, rangeEnd) {
+  const sampleHours = resolveShopHoursForInstant(shop, rangeEnd);
+  const openMin = parseHHMMToMinutes(sampleHours.opening_time);
+  const closeMin = parseHHMMToMinutes(sampleHours.closing_time);
+  if (openMin === null || closeMin === null || closeMin >= openMin) return rangeEnd;
+  // Extend to closing time of the day after rangeEnd
+  const nextDay = new Date(rangeEnd);
+  nextDay.setUTCDate(nextDay.getUTCDate() + 1);
+  return combineDateWithMinuteOffset(nextDay, closeMin);
+}
+
 function buildEffectiveWindow(punchIn, punchOut, adjustedMinutes) {
   const start = new Date(punchIn);
   const actualMinutes = minutesBetween(punchIn, punchOut);
@@ -222,6 +236,10 @@ function buildShopCoverageWindows(shop, rangeStart, rangeEnd) {
   const windows = [];
   let requiredCoverageMinutes = 0;
 
+  // For overnight shops (closing < opening), the last day's window extends past midnight.
+  // Use effectiveRangeEnd so that window is not incorrectly clipped at 23:59.
+  const effectiveRangeEnd = overnightEffectiveRangeEnd(shop, rangeEnd);
+
   eachUtcDay(rangeStart, rangeEnd).forEach((day) => {
     const dayHours = resolveShopHoursForInstant(shop, day);
     const openMinute = parseHHMMToMinutes(dayHours.opening_time);
@@ -236,10 +254,10 @@ function buildShopCoverageWindows(shop, rangeStart, rangeEnd) {
       windowEnd.setUTCDate(windowEnd.getUTCDate() + 1);
     }
 
-    if (windowEnd <= rangeStart || windowStart >= rangeEnd) return;
+    if (windowEnd <= rangeStart || windowStart >= effectiveRangeEnd) return;
 
     const start = new Date(Math.max(windowStart.getTime(), rangeStart.getTime()));
-    const end = new Date(Math.min(windowEnd.getTime(), rangeEnd.getTime()));
+    const end = new Date(Math.min(windowEnd.getTime(), effectiveRangeEnd.getTime()));
     if (end <= start) return;
 
     windows.push({ start, end });
@@ -358,10 +376,14 @@ async function assertShopHasContinuousCoverage({
   );
   if (!shop) throw new AppError('Shop not found', 404);
 
+  // For overnight shops the operating window extends past midnight; extend
+  // the punch_in ceiling so records starting after midnight are included.
+  const queryRangeEnd = overnightEffectiveRangeEnd(shop, rangeEnd);
+
   const records = await Attendance.find({
     shop_id: shopId,
     is_active: { $ne: false },
-    punch_in: { $lte: rangeEnd },
+    punch_in: { $lte: queryRangeEnd },
     punch_out: { $ne: null, $gte: rangeStart },
   }).select('user_id punch_in punch_out effective_start effective_end');
 
