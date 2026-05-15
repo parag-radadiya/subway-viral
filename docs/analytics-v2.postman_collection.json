@@ -1,0 +1,291 @@
+{
+  "info": {
+    "name": "Subway — Analytics v2",
+    "description": "Financial analytics dashboard endpoints for the Subway franchise reporting backend.\n\nReplace `{{jwt}}` with your Bearer token (get one from POST /api/auth/login).\nReplace `{{shop_id_*}}` variables with real shop IDs from GET /api/shops.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_postman_id": "subway-analytics-v2"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:3000", "type": "string" },
+    { "key": "jwt", "value": "PASTE_YOUR_BEARER_TOKEN_HERE", "type": "string" },
+    { "key": "shop_id_1", "value": "69f4c6243a7e3e41d36af715", "type": "string" },
+    { "key": "shop_id_2", "value": "69f4c6f03a7e3e41d36af722", "type": "string" },
+    { "key": "shop_id_3", "value": "69f4c7823a7e3e41d36af730", "type": "string" }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{jwt}}", "type": "string" }]
+  },
+  "item": [
+    {
+      "name": "Setup",
+      "item": [
+        {
+          "name": "Login (get JWT)",
+          "request": {
+            "method": "POST",
+            "auth": { "type": "noauth" },
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@example.com\",\n  \"password\": \"YOUR_PASSWORD\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/login",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "login"]
+            }
+          }
+        },
+        {
+          "name": "List shops",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/shops?page=1&limit=50",
+              "host": ["{{base_url}}"],
+              "path": ["api", "shops"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "50" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "1. KPI Matrix",
+      "item": [
+        {
+          "name": "1a. All shops 2025 vs 2024",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/store-reports/analytics/v2/kpi-matrix?from_date=2025-01-01&to_date=2025-12-31&compare_from=2024-01-01&compare_to=2024-12-31",
+              "host": ["{{base_url}}"],
+              "path": ["api", "store-reports", "analytics", "v2", "kpi-matrix"],
+              "query": [
+                { "key": "from_date", "value": "2025-01-01" },
+                { "key": "to_date", "value": "2025-12-31" },
+                { "key": "compare_from", "value": "2024-01-01" },
+                { "key": "compare_to", "value": "2024-12-31" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "1b. Selected shops, H1 2025 only",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/store-reports/analytics/v2/kpi-matrix?from_date=2025-01-01&to_date=2025-06-30&shop_ids={{shop_id_1}},{{shop_id_2}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "store-reports", "analytics", "v2", "kpi-matrix"],
+              "query": [
+                { "key": "from_date", "value": "2025-01-01" },
+                { "key": "to_date", "value": "2025-06-30" },
+                { "key": "shop_ids", "value": "{{shop_id_1}},{{shop_id_2}}" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "1c. Q1 2025 vs Q4 2024",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/store-reports/analytics/v2/kpi-matrix?from_date=2025-01-01&to_date=2025-03-31&compare_from=2024-10-01&compare_to=2024-12-31",
+              "host": ["{{base_url}}"],
+              "path": ["api", "store-reports", "analytics", "v2", "kpi-matrix"],
+              "query": [
+                { "key": "from_date", "value": "2025-01-01" },
+                { "key": "to_date", "value": "2025-03-31" },
+                { "key": "compare_from", "value": "2024-10-01" },
+                { "key": "compare_to", "value": "2024-12-31" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Shop Compare",
+      "item": [
+        {
+          "name": "2a. 3 shops, key metrics",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/store-reports/analytics/v2/shop-compare?from_date=2025-01-01&to_date=2025-12-31&shop_ids={{shop_id_1}},{{shop_id_2}},{{shop_id_3}}&metrics=grossSales,netSales,labour,labourPercent,foodCost,foodCostPercent,customerCount,avgOrderValue",
+              "host": ["{{base_url}}"],
+              "path": ["api", "store-reports", "analytics", "v2", "shop-compare"],
+              "query": [
+                { "key": "from_date", "value": "2025-01-01" },
+                { "key": "to_date", "value": "2025-12-31" },
+                { "key": "shop_ids", "value": "{{shop_id_1}},{{shop_id_2}},{{shop_id_3}}" },
+                {
+                  "key": "metrics",
+                  "value": "grossSales,netSales,labour,labourPercent,foodCost,foodCostPercent,customerCount,avgOrderValue"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "2b. 3 shops, all metrics (default)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/store-reports/analytics/v2/shop-compare?from_date=2025-01-01&to_date=2025-06-30&shop_ids={{shop_id_1}},{{shop_id_2}},{{shop_id_3}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "store-reports", "analytics", "v2", "shop-compare"],
+              "query": [
+                { "key": "from_date", "value": "2025-01-01" },
+                { "key": "to_date", "value": "2025-06-30" },
+                { "key": "shop_ids", "value": "{{shop_id_1}},{{shop_id_2}},{{shop_id_3}}" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Period Compare",
+      "item": [
+        {
+          "name": "3a. Q1 2025 vs Q1 2024",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/store-reports/analytics/v2/period-compare?current_from=2025-01-01&current_to=2025-03-31&compare_from=2024-01-01&compare_to=2024-03-31&metrics=grossSales,netSales,labour,labourPercent,foodCost,customerCount",
+              "host": ["{{base_url}}"],
+              "path": ["api", "store-reports", "analytics", "v2", "period-compare"],
+              "query": [
+                { "key": "current_from", "value": "2025-01-01" },
+                { "key": "current_to", "value": "2025-03-31" },
+                { "key": "compare_from", "value": "2024-01-01" },
+                { "key": "compare_to", "value": "2024-03-31" },
+                {
+                  "key": "metrics",
+                  "value": "grossSales,netSales,labour,labourPercent,foodCost,customerCount"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "3b. This month vs last month (single shop)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/store-reports/analytics/v2/period-compare?current_from=2025-05-01&current_to=2025-05-31&compare_from=2025-04-01&compare_to=2025-04-30&shop_ids={{shop_id_1}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "store-reports", "analytics", "v2", "period-compare"],
+              "query": [
+                { "key": "current_from", "value": "2025-05-01" },
+                { "key": "current_to", "value": "2025-05-31" },
+                { "key": "compare_from", "value": "2025-04-01" },
+                { "key": "compare_to", "value": "2025-04-30" },
+                { "key": "shop_ids", "value": "{{shop_id_1}}" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "3c. Full year YoY (2025 vs 2024)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/store-reports/analytics/v2/period-compare?current_from=2025-01-01&current_to=2025-12-31&compare_from=2024-01-01&compare_to=2024-12-31",
+              "host": ["{{base_url}}"],
+              "path": ["api", "store-reports", "analytics", "v2", "period-compare"],
+              "query": [
+                { "key": "current_from", "value": "2025-01-01" },
+                { "key": "current_to", "value": "2025-12-31" },
+                { "key": "compare_from", "value": "2024-01-01" },
+                { "key": "compare_to", "value": "2024-12-31" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Trend",
+      "item": [
+        {
+          "name": "4a. Monthly revenue trend (24 months)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/store-reports/analytics/v2/trend?from_date=2024-01-01&to_date=2025-12-31&metrics=grossSales,labour,foodCost&granularity=month&group_by=total",
+              "host": ["{{base_url}}"],
+              "path": ["api", "store-reports", "analytics", "v2", "trend"],
+              "query": [
+                { "key": "from_date", "value": "2024-01-01" },
+                { "key": "to_date", "value": "2025-12-31" },
+                { "key": "metrics", "value": "grossSales,labour,foodCost" },
+                { "key": "granularity", "value": "month" },
+                { "key": "group_by", "value": "total" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "4b. Weekly labour % per shop",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/store-reports/analytics/v2/trend?from_date=2025-01-01&to_date=2025-12-31&metrics=labourPercent&granularity=week&group_by=shop&shop_ids={{shop_id_1}},{{shop_id_2}},{{shop_id_3}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "store-reports", "analytics", "v2", "trend"],
+              "query": [
+                { "key": "from_date", "value": "2025-01-01" },
+                { "key": "to_date", "value": "2025-12-31" },
+                { "key": "metrics", "value": "labourPercent" },
+                { "key": "granularity", "value": "week" },
+                { "key": "group_by", "value": "shop" },
+                { "key": "shop_ids", "value": "{{shop_id_1}},{{shop_id_2}},{{shop_id_3}}" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "4c. Channel mix stacked area",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/store-reports/analytics/v2/trend?from_date=2025-01-01&to_date=2025-12-31&metrics=justeat,ubereat,deliveroo,instore&granularity=month",
+              "host": ["{{base_url}}"],
+              "path": ["api", "store-reports", "analytics", "v2", "trend"],
+              "query": [
+                { "key": "from_date", "value": "2025-01-01" },
+                { "key": "to_date", "value": "2025-12-31" },
+                { "key": "metrics", "value": "justeat,ubereat,deliveroo,instore" },
+                { "key": "granularity", "value": "month" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "4d. Customer count + AOV trend",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/store-reports/analytics/v2/trend?from_date=2024-01-01&to_date=2025-12-31&metrics=customerCount,avgOrderValue&granularity=month",
+              "host": ["{{base_url}}"],
+              "path": ["api", "store-reports", "analytics", "v2", "trend"],
+              "query": [
+                { "key": "from_date", "value": "2024-01-01" },
+                { "key": "to_date", "value": "2025-12-31" },
+                { "key": "metrics", "value": "customerCount,avgOrderValue" },
+                { "key": "granularity", "value": "month" }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
