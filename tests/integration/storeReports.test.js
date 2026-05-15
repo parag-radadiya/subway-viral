@@ -570,12 +570,14 @@ describe('Store reports integration', () => {
         pagination_basis: 'week_number',
       });
 
+    // Default order is now desc (newest week first) — page 1 has week 21,
+    // page 2 has week 20.
     expectEnvelope(page1Res, 200);
     expect(page1Res.body.data.pagination.basis).toBe('week_number');
     expect(page1Res.body.data.pagination.total_weeks).toBe(2);
     expect(page1Res.body.data.pagination.count).toBe(1);
-    expect(page1Res.body.data.rows).toHaveLength(2);
-    expect(page1Res.body.data.rows.every((row) => row.weekNumber === 20)).toBe(true);
+    expect(page1Res.body.data.rows).toHaveLength(1);
+    expect(page1Res.body.data.rows[0].weekNumber).toBe(21);
 
     const page2Res = await request(app)
       .get('/api/store-reports/table')
@@ -590,8 +592,24 @@ describe('Store reports integration', () => {
       });
 
     expectEnvelope(page2Res, 200);
-    expect(page2Res.body.data.rows).toHaveLength(1);
-    expect(page2Res.body.data.rows[0].weekNumber).toBe(21);
+    expect(page2Res.body.data.rows).toHaveLength(2);
+    expect(page2Res.body.data.rows.every((row) => row.weekNumber === 20)).toBe(true);
+
+    // Also verify order=asc still gives the original behaviour
+    const ascRes = await request(app)
+      .get('/api/store-reports/table')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({
+        view: 'admin_weekly',
+        report_type: 'weekly_financial',
+        year: 2026,
+        page: 1,
+        limit: 1,
+        pagination_basis: 'week_number',
+        order: 'asc',
+      });
+    expectEnvelope(ascRes, 200);
+    expect(ascRes.body.data.rows.every((row) => row.weekNumber === 20)).toBe(true);
   });
 
   it('REPORT-013: group_by=month derives monthly rows from weekly_financial data', async () => {

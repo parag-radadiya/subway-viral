@@ -1079,7 +1079,12 @@ function parseGroupBy(query) {
   return groupBy;
 }
 
-function buildWeeklyTotals(rows, reportType) {
+// Multiplier for asc/desc sort. desc = -1 reverses the natural ordering.
+function sortSign(order) {
+  return order === 'asc' ? 1 : -1;
+}
+
+function buildWeeklyTotals(rows, reportType, order = 'desc') {
   if (reportType !== 'weekly_financial') return [];
 
   const grouped = new Map();
@@ -1111,16 +1116,17 @@ function buildWeeklyTotals(rows, reportType) {
     });
   });
 
+  const sign = sortSign(order);
   return Array.from(grouped.values()).sort((a, b) => {
     const yearDiff = (a.year || 0) - (b.year || 0);
-    if (yearDiff !== 0) return yearDiff;
+    if (yearDiff !== 0) return sign * yearDiff;
     const monthDiff = (a.month || 0) - (b.month || 0);
-    if (monthDiff !== 0) return monthDiff;
-    return (a.weekNumber || 0) - (b.weekNumber || 0);
+    if (monthDiff !== 0) return sign * monthDiff;
+    return sign * ((a.weekNumber || 0) - (b.weekNumber || 0));
   });
 }
 
-function deriveMonthlyRowsFromWeekly(rows) {
+function deriveMonthlyRowsFromWeekly(rows, order = 'desc') {
   const pickMetric = (metrics, aliases) => {
     if (!metrics || typeof metrics !== 'object') return null;
 
@@ -1210,27 +1216,33 @@ function deriveMonthlyRowsFromWeekly(rows) {
       return row;
     })
     .sort((a, b) => {
+      const sign = sortSign(order);
       const yearDiff = (a.year || 0) - (b.year || 0);
-      if (yearDiff !== 0) return yearDiff;
+      if (yearDiff !== 0) return sign * yearDiff;
       const monthDiff = (a.month || 0) - (b.month || 0);
-      if (monthDiff !== 0) return monthDiff;
+      if (monthDiff !== 0) return sign * monthDiff;
+      // Shop name stays alphabetical (it's a label, not a chronology)
       return String(a.shopName || '').localeCompare(String(b.shopName || ''));
     });
 }
 
 function toDatasetPayloadWithPagination(records, reportType, pagination, options = {}) {
+  const order = options.order === 'asc' ? 'asc' : 'desc';
+  const sign = sortSign(order);
+
   let rows = records.map(toTableRow).sort((a, b) => {
     const yearDiff = (a.year || 0) - (b.year || 0);
-    if (yearDiff !== 0) return yearDiff;
+    if (yearDiff !== 0) return sign * yearDiff;
     const monthDiff = (a.month || 0) - (b.month || 0);
-    if (monthDiff !== 0) return monthDiff;
+    if (monthDiff !== 0) return sign * monthDiff;
     const weekDiff = (a.weekNumber || 0) - (b.weekNumber || 0);
-    if (weekDiff !== 0) return weekDiff;
+    if (weekDiff !== 0) return sign * weekDiff;
+    // Shop name stays alphabetical (it's a label, not a chronology)
     return String(a.shopName || '').localeCompare(String(b.shopName || ''));
   });
 
   if (options.groupBy === 'month' && reportType === 'weekly_financial') {
-    rows = deriveMonthlyRowsFromWeekly(rows);
+    rows = deriveMonthlyRowsFromWeekly(rows, order);
   }
 
   const paginationBasis = options.paginationBasis || 'row';
@@ -1245,7 +1257,9 @@ function toDatasetPayloadWithPagination(records, reportType, pagination, options
       groups.get(key).push(row);
     });
 
-    const groupedRows = Array.from(groups.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+    const groupedRows = Array.from(groups.entries()).sort(
+      (a, b) => sign * a[0].localeCompare(b[0])
+    );
     const totalWeeks = groupedRows.length;
     const totalPages = Math.max(1, Math.ceil(totalWeeks / pagination.limit));
     const safePage = Math.min(pagination.page, totalPages);
@@ -1271,7 +1285,7 @@ function toDatasetPayloadWithPagination(records, reportType, pagination, options
     };
 
     if (options.includeWeeklyTotals) {
-      payload.weekly_totals = buildWeeklyTotals(rows, reportType);
+      payload.weekly_totals = buildWeeklyTotals(rows, reportType, order);
     }
 
     return payload;
@@ -2346,6 +2360,13 @@ const getStoreReportTable = asyncHandler(async (req, res) => {
   const paginationBasis = parsePaginationBasis(req.query);
   const groupBy = parseGroupBy(req.query);
 
+  // Sort direction: 'desc' (default, newest first) or 'asc' (oldest first)
+  const rawOrder = String(req.query.order || 'desc').toLowerCase();
+  if (!['asc', 'desc'].includes(rawOrder)) {
+    throw new AppError('order must be one of asc, desc', 400);
+  }
+  const order = rawOrder;
+
   if (groupBy === 'month' && reportType !== 'weekly_financial') {
     throw new AppError('group_by=month is supported only with report_type=weekly_financial', 400);
   }
@@ -2388,16 +2409,19 @@ const getStoreReportTable = asyncHandler(async (req, res) => {
       includeWeeklyTotals,
       paginationBasis,
       groupBy,
+      order,
     }),
     admin_weekly: toDatasetPayloadWithPagination(adminRows, reportType, pagination, {
       includeWeeklyTotals,
       paginationBasis,
       groupBy,
+      order,
     }),
     reconciled: toDatasetPayloadWithPagination(reconciledRows, reportType, pagination, {
       includeWeeklyTotals,
       paginationBasis,
       groupBy,
+      order,
     }),
   };
 
