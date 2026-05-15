@@ -1431,4 +1431,315 @@ describe('Store reports integration', () => {
     expect(camdenRow).toBeTruthy();
     expect(camdenRow['grossSale']).toBe(12000);
   });
+
+  // ─── Analytics v2 ────────────────────────────────────────────────────────
+
+  async function seedV2Records(mainShop, eastShop) {
+    // 4 weeks of 2025 data, 2 shops
+    const baseMetrics = (sales, labour, food, je, ub, dr, cust) => ({
+      sales,
+      grossSales: sales,
+      netSales: Math.round(sales * 0.83),
+      net: Math.round(sales * 0.83),
+      vat: Math.round(sales * 0.18),
+      vat18: Math.round(sales * 0.18),
+      labour,
+      labourCost: labour,
+      labourHours: Math.round(labour / 12),
+      foodCost22: food,
+      bidFood: food,
+      justeatSale: je,
+      ubereatSale: ub,
+      deliverooSale: dr,
+      total3pdSale: je + ub + dr,
+      commission: Math.round((je + ub + dr) * 0.1),
+      customerCount: cust,
+    });
+
+    const docs = [];
+    for (let w = 1; w <= 4; w++) {
+      const monthEndWeek = new Date(Date.UTC(2025, 0, 5 + (w - 1) * 7));
+      const weekStart = new Date(Date.UTC(2024, 11, 30 + (w - 1) * 7));
+      docs.push({
+        shop_id: mainShop._id,
+        report_type: 'weekly_financial',
+        source_type: 'excel_raw',
+        period_key: `2025-01-W${String(w).padStart(2, '0')}`,
+        year: 2025,
+        month: 1,
+        week_number: w,
+        week_start: weekStart,
+        week_end: monthEndWeek,
+        week_range_label: 'mock',
+        store_name_raw: mainShop.name,
+        metrics: baseMetrics(1000 + w * 100, 250, 220, 80, 120, 100, 100 + w * 10),
+      });
+      docs.push({
+        shop_id: eastShop._id,
+        report_type: 'weekly_financial',
+        source_type: 'excel_raw',
+        period_key: `2025-01-W${String(w).padStart(2, '0')}`,
+        year: 2025,
+        month: 1,
+        week_number: w,
+        week_start: weekStart,
+        week_end: monthEndWeek,
+        week_range_label: 'mock',
+        store_name_raw: eastShop.name,
+        metrics: baseMetrics(800 + w * 80, 200, 180, 60, 100, 80, 80 + w * 8),
+      });
+    }
+    // Compare period: same 4 weeks of 2024
+    for (let w = 1; w <= 4; w++) {
+      const monthEndWeek = new Date(Date.UTC(2024, 0, 5 + (w - 1) * 7));
+      const weekStart = new Date(Date.UTC(2023, 11, 30 + (w - 1) * 7));
+      docs.push({
+        shop_id: mainShop._id,
+        report_type: 'weekly_financial',
+        source_type: 'excel_raw',
+        period_key: `2024-01-W${String(w).padStart(2, '0')}`,
+        year: 2024,
+        month: 1,
+        week_number: w,
+        week_start: weekStart,
+        week_end: monthEndWeek,
+        week_range_label: 'mock',
+        store_name_raw: mainShop.name,
+        metrics: baseMetrics(900 + w * 90, 240, 210, 70, 110, 90, 90 + w * 9),
+      });
+    }
+    await StoreReportEntry.insertMany(docs);
+  }
+
+  it('REPORT-V2-001: kpi-matrix returns total + per-shop with all metrics', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+    await seedV2Records(fixtures.shops.mainShop, fixtures.shops.eastShop);
+
+    const res = await request(app)
+      .get('/api/store-reports/analytics/v2/kpi-matrix')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({ from_date: '2025-01-01', to_date: '2025-01-31', view: 'excel_raw' });
+
+    expectEnvelope(res, 200);
+    expect(res.body.data.period.from).toBe('2025-01-01');
+    expect(res.body.data.total.record_count).toBe(8);
+    expect(res.body.data.total.current.grossSales).toBeGreaterThan(0);
+    expect(res.body.data.total.current.labourPercent).toBeGreaterThan(0);
+    expect(res.body.data.total.current.avgOrderValue).toBeGreaterThan(0);
+    expect(res.body.data.shops).toHaveLength(2);
+    expect(res.body.data.metric_keys).toContain('grossSales');
+    expect(res.body.data.metric_keys).toContain('labourPercent');
+    // Sorted by grossSales DESC
+    expect(res.body.data.shops[0].current.grossSales).toBeGreaterThanOrEqual(
+      res.body.data.shops[1].current.grossSales
+    );
+  });
+
+  it('REPORT-V2-002: kpi-matrix with compare period returns deltas', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+    await seedV2Records(fixtures.shops.mainShop, fixtures.shops.eastShop);
+
+    const res = await request(app)
+      .get('/api/store-reports/analytics/v2/kpi-matrix')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({
+        from_date: '2025-01-01',
+        to_date: '2025-01-31',
+        compare_from: '2024-01-01',
+        compare_to: '2024-01-31',
+        view: 'excel_raw',
+      });
+
+    expectEnvelope(res, 200);
+    expect(res.body.data.total.delta).not.toBeNull();
+    expect(res.body.data.total.delta.grossSales).toEqual(
+      expect.objectContaining({
+        current: expect.any(Number),
+        compare: expect.any(Number),
+        change: expect.any(Number),
+      })
+    );
+    expect(res.body.data.compare_period.from).toBe('2024-01-01');
+  });
+
+  it('REPORT-V2-003: kpi-matrix filters by shop_ids', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+    await seedV2Records(fixtures.shops.mainShop, fixtures.shops.eastShop);
+
+    const res = await request(app)
+      .get('/api/store-reports/analytics/v2/kpi-matrix')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({
+        from_date: '2025-01-01',
+        to_date: '2025-01-31',
+        shop_ids: String(fixtures.shops.mainShop._id),
+        view: 'excel_raw',
+      });
+
+    expectEnvelope(res, 200);
+    expect(res.body.data.shops).toHaveLength(1);
+    expect(res.body.data.shops[0].shopName).toBe(fixtures.shops.mainShop.name);
+  });
+
+  it('REPORT-V2-004: shop-compare requires shop_ids and returns matrix', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+    await seedV2Records(fixtures.shops.mainShop, fixtures.shops.eastShop);
+
+    const missing = await request(app)
+      .get('/api/store-reports/analytics/v2/shop-compare')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({ from_date: '2025-01-01', to_date: '2025-01-31' });
+    expect(missing.status).toBe(400);
+
+    const res = await request(app)
+      .get('/api/store-reports/analytics/v2/shop-compare')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({
+        from_date: '2025-01-01',
+        to_date: '2025-01-31',
+        shop_ids: `${fixtures.shops.mainShop._id},${fixtures.shops.eastShop._id}`,
+        metrics: 'grossSales,labour,labourPercent',
+        view: 'excel_raw',
+      });
+
+    expectEnvelope(res, 200);
+    expect(res.body.data.shops).toHaveLength(2);
+    expect(res.body.data.matrix).toHaveLength(3);
+    const grossRow = res.body.data.matrix.find((r) => r.metric === 'grossSales');
+    expect(grossRow.best_shop).toBeTruthy();
+    expect(grossRow[String(fixtures.shops.mainShop._id)]).toBeGreaterThan(0);
+    expect(grossRow.total).toBeGreaterThan(0);
+  });
+
+  it('REPORT-V2-005: shop-compare rejects unknown metric', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+
+    const res = await request(app)
+      .get('/api/store-reports/analytics/v2/shop-compare')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({
+        shop_ids: String(fixtures.shops.mainShop._id),
+        metrics: 'foobar',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/Unknown metric/);
+  });
+
+  it('REPORT-V2-006: period-compare returns deltas for both periods', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+    await seedV2Records(fixtures.shops.mainShop, fixtures.shops.eastShop);
+
+    const res = await request(app)
+      .get('/api/store-reports/analytics/v2/period-compare')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({
+        current_from: '2025-01-01',
+        current_to: '2025-01-31',
+        compare_from: '2024-01-01',
+        compare_to: '2024-01-31',
+        view: 'excel_raw',
+      });
+
+    expectEnvelope(res, 200);
+    expect(res.body.data.current_period.record_count).toBe(8);
+    expect(res.body.data.compare_period.record_count).toBe(4);
+    expect(res.body.data.total.current.grossSales).toBeGreaterThan(0);
+    expect(res.body.data.total.compare.grossSales).toBeGreaterThan(0);
+    expect(res.body.data.total.delta.grossSales.change).toEqual(expect.any(Number));
+    expect(res.body.data.shops.length).toBeGreaterThan(0);
+  });
+
+  it('REPORT-V2-007: period-compare requires all 4 date params', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+
+    const res = await request(app)
+      .get('/api/store-reports/analytics/v2/period-compare')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({ current_from: '2025-01-01', current_to: '2025-01-31' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/current_from.*compare_from/);
+  });
+
+  it('REPORT-V2-008: trend returns time series grouped by total', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+    await seedV2Records(fixtures.shops.mainShop, fixtures.shops.eastShop);
+
+    const res = await request(app)
+      .get('/api/store-reports/analytics/v2/trend')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({
+        from_date: '2025-01-01',
+        to_date: '2025-01-31',
+        metrics: 'grossSales,labour',
+        granularity: 'week',
+        view: 'excel_raw',
+      });
+
+    expectEnvelope(res, 200);
+    expect(res.body.data.granularity).toBe('week');
+    expect(res.body.data.group_by).toBe('total');
+    expect(res.body.data.total.series.length).toBe(4);
+    expect(res.body.data.total.series[0]).toHaveProperty('grossSales');
+    expect(res.body.data.total.series[0]).toHaveProperty('labour');
+    expect(res.body.data.shops).toBeNull();
+    // Series sorted by week
+    expect(res.body.data.total.series[0].weekNumber).toBe(1);
+    expect(res.body.data.total.series[3].weekNumber).toBe(4);
+  });
+
+  it('REPORT-V2-009: trend with group_by=shop returns per-shop series', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+    await seedV2Records(fixtures.shops.mainShop, fixtures.shops.eastShop);
+
+    const res = await request(app)
+      .get('/api/store-reports/analytics/v2/trend')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({
+        from_date: '2025-01-01',
+        to_date: '2025-01-31',
+        metrics: 'grossSales',
+        granularity: 'week',
+        group_by: 'shop',
+        view: 'excel_raw',
+      });
+
+    expectEnvelope(res, 200);
+    expect(res.body.data.shops).toHaveLength(2);
+    expect(res.body.data.shops[0].series).toHaveLength(4);
+    expect(res.body.data.shops[0].total.grossSales).toBeGreaterThan(0);
+  });
+
+  it('REPORT-V2-010: trend with granularity=month aggregates weeks', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+    await seedV2Records(fixtures.shops.mainShop, fixtures.shops.eastShop);
+
+    const res = await request(app)
+      .get('/api/store-reports/analytics/v2/trend')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({
+        from_date: '2025-01-01',
+        to_date: '2025-01-31',
+        metrics: 'grossSales',
+        granularity: 'month',
+        view: 'excel_raw',
+      });
+
+    expectEnvelope(res, 200);
+    expect(res.body.data.granularity).toBe('month');
+    expect(res.body.data.total.series).toHaveLength(1);
+    expect(res.body.data.total.series[0].periodKey).toBe('2025-01');
+    expect(res.body.data.total.series[0].weekNumber).toBeNull();
+  });
+
+  it('REPORT-V2-011: v2 endpoints require can_view_all_staff permission', async () => {
+    const staffLogin = await login('staff@org.com', 'Staff@1234');
+
+    const res = await request(app)
+      .get('/api/store-reports/analytics/v2/kpi-matrix')
+      .set('Authorization', `Bearer ${staffLogin.token}`);
+
+    expect(res.status).toBe(403);
+  });
 });

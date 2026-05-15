@@ -2967,6 +2967,520 @@ const exportExcel = asyncHandler(async (req, res) => {
   return res.send(buffer);
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Analytics v2 — flexible KPI matrix, shop compare, period compare, trends
+// ═══════════════════════════════════════════════════════════════════════════
+
+// All metric definitions: key → alias list used by readMetric()
+const FULL_METRIC_DEFS = {
+  grossSales: ['sales', 'gross sales', 'grosssales', 'grosssale'],
+  netSales: ['net', 'net sales', 'netsales', 'netsale'],
+  vat: ['vat18', 'vat'],
+  vatPercent: ['vatpercent', 'vat percent'],
+  adjustedVat: ['adjustedvat', 'adjusted vat'],
+  labour: ['labour', 'labour cost', 'labourcost'],
+  labourHours: ['labourhours', 'labour hours'],
+  labourPercent: ['labourcostpercent', 'labour cost percent'],
+  foodCost: ['foodcost22', 'bid food', 'bidfood', 'food cost'],
+  foodCostPercent: ['foodcostpercent', 'food cost percent'],
+  justeat: ['justeat sale', 'justeat', 'just eat sale'],
+  ubereat: ['ubereat sale', 'ubereat', 'uber eat sale'],
+  deliveroo: ['deliveroo sale', 'deliveroo'],
+  total3pd: ['total 3pd sale', 'total3pdsale', '3pd sale'],
+  deliveryPercent: ['deliverypercent', 'delivery percent'],
+  commission: ['commission', 'delivery charges total', 'deliverychargestotal'],
+  commissionPercent: ['commissionpercentage', 'delivery charge percent'],
+  customerCount: ['customercount', 'customer count'],
+  income: ['income'],
+  totalCostPercent: ['totalcostpercent', 'total cost percent'],
+};
+
+const FULL_METRIC_KEYS = Object.keys(FULL_METRIC_DEFS);
+
+function extractFullMetrics(record) {
+  const m = record.metrics || {};
+  const out = {};
+  for (const [key, aliases] of Object.entries(FULL_METRIC_DEFS)) {
+    out[key] = readMetric(m, aliases);
+  }
+  out.instore = round2(Math.max((out.grossSales || 0) - (out.total3pd || 0), 0));
+  return out;
+}
+
+function sumFullMetrics(records) {
+  const sum = Object.fromEntries([...FULL_METRIC_KEYS, 'instore'].map((k) => [k, 0]));
+  for (const rec of records) {
+    const fm = extractFullMetrics(rec);
+    for (const k of [...FULL_METRIC_KEYS, 'instore']) {
+      sum[k] += fm[k] || 0;
+    }
+  }
+  for (const k of Object.keys(sum)) sum[k] = round2(sum[k]);
+  // Recalculate derived % from totals (more accurate than summing row-level %)
+  const gs = sum.grossSales || 0;
+  const ns = sum.netSales || 0;
+  if (gs > 0) {
+    sum.vatPercent = round2((sum.vat / gs) * 100);
+    sum.deliveryPercent = round2((sum.total3pd / gs) * 100);
+    sum.commissionPercent = round2((sum.commission / gs) * 100);
+    sum.totalCostPercent = round2(((sum.labour + sum.foodCost + sum.commission) / gs) * 100);
+    sum.instorePercent = round2((sum.instore / gs) * 100);
+    sum.threePdPercent = round2((sum.total3pd / gs) * 100);
+  }
+  if (ns > 0) {
+    sum.labourPercent = round2((sum.labour / ns) * 100);
+    sum.foodCostPercent = round2((sum.foodCost / ns) * 100);
+  }
+  sum.avgOrderValue = sum.customerCount > 0 ? round2(sum.grossSales / sum.customerCount) : 0;
+  return sum;
+}
+
+function deltaMetrics(current, compare) {
+  const delta = {};
+  for (const k of Object.keys(current)) {
+    const cur = current[k] || 0;
+    const prev = compare[k] || 0;
+    const change = round2(cur - prev);
+    const changePct = prev === 0 ? null : round2((change / Math.abs(prev)) * 100);
+    delta[k] = { current: cur, compare: prev, change, changePct };
+  }
+  return delta;
+}
+
+function parseShopIds(query) {
+  const raw = String(query.shop_ids || query.shop_id || '').trim();
+  if (!raw) return null; // null = all shops
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function parseMetricKeys(query) {
+  const raw = String(query.metrics || '').trim();
+  if (!raw) return FULL_METRIC_KEYS;
+  const requested = raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const invalid = requested.filter((k) => !FULL_METRIC_KEYS.includes(k) && k !== 'instore');
+  if (invalid.length > 0) {
+    throw new AppError(
+      `Unknown metric(s): ${invalid.join(', ')}. Valid: ${[...FULL_METRIC_KEYS, 'instore'].join(', ')}`,
+      400
+    );
+  }
+  return requested;
+}
+
+// Build a MongoDB date filter for StoreReportEntry using week_start/week_end
+function buildDateRangeFilter(fromDate, toDate) {
+  if (!fromDate && !toDate) return {};
+  const filter = {};
+  if (fromDate) filter.week_start = { $lte: toUtcDayEnd(toDate || fromDate) };
+  if (toDate) filter.week_end = { $gte: toUtcDayStart(fromDate || toDate) };
+  return filter;
+}
+
+async function fetchRecordsForPeriod({ fromDate, toDate, shopIds, reportType, view }) {
+  const filter = {
+    report_type: reportType || 'weekly_financial',
+    ...(fromDate || toDate ? buildDateRangeFilter(fromDate, toDate) : {}),
+  };
+  if (shopIds && shopIds.length > 0) {
+    filter.shop_id = { $in: shopIds.map((id) => new (require('mongoose').Types.ObjectId)(id)) };
+  }
+  if (view === 'excel_raw' || view === 'admin_weekly') {
+    filter.source_type = view;
+  }
+  // For reconciled: load both and merge (admin takes precedence per period_key)
+  if (!view || view === 'reconciled') {
+    const [excelRows, adminRows] = await Promise.all([
+      StoreReportEntry.find({ ...filter, source_type: 'excel_raw' }).populate('shop_id', 'name'),
+      StoreReportEntry.find({ ...filter, source_type: 'admin_weekly' }).populate('shop_id', 'name'),
+    ]);
+    const merged = new Map();
+    excelRows.forEach((r) => merged.set(String(r._id), r));
+    // Admin overrides excel for same shop+period
+    const adminByPeriod = new Map();
+    adminRows.forEach((r) => {
+      adminByPeriod.set(`${String(r.shop_id?._id || r.shop_id)}::${r.period_key}`, r);
+    });
+    const out = [];
+    excelRows.forEach((r) => {
+      const key = `${String(r.shop_id?._id || r.shop_id)}::${r.period_key}`;
+      if (!adminByPeriod.has(key)) out.push(r);
+    });
+    adminRows.forEach((r) => out.push(r));
+    return out;
+  }
+  return StoreReportEntry.find(filter).populate('shop_id', 'name');
+}
+
+function groupRecordsByShop(records) {
+  const map = new Map();
+  for (const rec of records) {
+    const shopId = String(rec.shop_id?._id || rec.shop_id);
+    const shopName = rec.shop_id?.name || rec.store_name_raw || shopId;
+    if (!map.has(shopId)) map.set(shopId, { shopId, shopName, records: [] });
+    map.get(shopId).records.push(rec);
+  }
+  return Array.from(map.values());
+}
+
+function buildPeriodSeriesKey(rec, granularity) {
+  if (granularity === 'month') {
+    return `${rec.year}-${String(rec.month || 0).padStart(2, '0')}`;
+  }
+  const m = String(rec.month || 0).padStart(2, '0');
+  const w = String(rec.week_number || 0).padStart(2, '0');
+  return `${rec.year}-${m}-W${w}`;
+}
+
+function buildPeriodLabel(rec, granularity) {
+  if (granularity === 'month') {
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    return `${months[(rec.month || 1) - 1]} ${rec.year}`;
+  }
+  return rec.week_range_label
+    ? `W${String(rec.week_number || 0).padStart(2, '0')} ${rec.week_range_label}`
+    : `W${String(rec.week_number || 0).padStart(2, '0')} ${rec.year}`;
+}
+
+// ── v2 handlers ──────────────────────────────────────────────────────────────
+
+// GET /api/store-reports/analytics/v2/kpi-matrix
+// Full financial KPI breakdown for selected period — total + per shop + optional compare period
+const getAnalyticsV2KpiMatrix = asyncHandler(async (req, res) => {
+  const { from_date, to_date, compare_from, compare_to, report_type, view } = req.query;
+  const shopIds = parseShopIds(req.query);
+
+  const [current, compare] = await Promise.all([
+    fetchRecordsForPeriod({
+      fromDate: from_date ? new Date(from_date) : null,
+      toDate: to_date ? new Date(to_date) : null,
+      shopIds,
+      reportType: report_type,
+      view,
+    }),
+    compare_from || compare_to
+      ? fetchRecordsForPeriod({
+          fromDate: compare_from ? new Date(compare_from) : null,
+          toDate: compare_to ? new Date(compare_to) : null,
+          shopIds,
+          reportType: report_type,
+          view,
+        })
+      : Promise.resolve([]),
+  ]);
+
+  const currentTotal = sumFullMetrics(current);
+  const compareTotal = compare.length ? sumFullMetrics(compare) : null;
+
+  const currentByShop = groupRecordsByShop(current);
+  const compareByShopMap = new Map(groupRecordsByShop(compare).map((s) => [s.shopId, s]));
+
+  const shops = currentByShop.map((shop) => {
+    const cur = sumFullMetrics(shop.records);
+    const cmp = compareByShopMap.has(shop.shopId)
+      ? sumFullMetrics(compareByShopMap.get(shop.shopId).records)
+      : null;
+    return {
+      shopId: shop.shopId,
+      shopName: shop.shopName,
+      current: cur,
+      compare: cmp,
+      delta: cmp ? deltaMetrics(cur, cmp) : null,
+      record_count: shop.records.length,
+    };
+  });
+
+  shops.sort((a, b) => (b.current.grossSales || 0) - (a.current.grossSales || 0));
+
+  return sendSuccess(res, 'KPI matrix fetched successfully', {
+    period: { from: from_date || null, to: to_date || null },
+    compare_period:
+      compare_from || compare_to ? { from: compare_from || null, to: compare_to || null } : null,
+    total: {
+      current: currentTotal,
+      compare: compareTotal,
+      delta: compareTotal ? deltaMetrics(currentTotal, compareTotal) : null,
+      record_count: current.length,
+    },
+    shops,
+    metric_keys: [...FULL_METRIC_KEYS, 'instore'],
+  });
+});
+
+// GET /api/store-reports/analytics/v2/shop-compare
+// Side-by-side comparison of selected shops for the same date range
+const getAnalyticsV2ShopCompare = asyncHandler(async (req, res) => {
+  const { from_date, to_date, report_type, view } = req.query;
+  const shopIds = parseShopIds(req.query);
+  const metrics = parseMetricKeys(req.query);
+
+  if (!shopIds || shopIds.length < 1) {
+    throw new AppError('shop_ids is required (comma-separated list of shop IDs)', 400);
+  }
+
+  const records = await fetchRecordsForPeriod({
+    fromDate: from_date ? new Date(from_date) : null,
+    toDate: to_date ? new Date(to_date) : null,
+    shopIds,
+    reportType: report_type,
+    view,
+  });
+
+  const byShop = groupRecordsByShop(records);
+
+  // Build column table: one row per metric, one column per shop
+  const shopSummaries = byShop.map((shop) => ({
+    shopId: shop.shopId,
+    shopName: shop.shopName,
+    kpis: sumFullMetrics(shop.records),
+    record_count: shop.records.length,
+  }));
+
+  // Matrix: metrics × shops
+  const matrix = metrics.map((metric) => {
+    const row = { metric };
+    let total = 0;
+    let best = null;
+    shopSummaries.forEach((shop) => {
+      const val = shop.kpis[metric] ?? 0;
+      row[shop.shopId] = val;
+      total += val;
+      if (best === null || val > best.value)
+        best = { shopId: shop.shopId, shopName: shop.shopName, value: val };
+    });
+    row.total = round2(total);
+    row.best_shop = best;
+    return row;
+  });
+
+  return sendSuccess(res, 'Shop comparison fetched successfully', {
+    period: { from: from_date || null, to: to_date || null },
+    shops: shopSummaries.map((s) => ({
+      shopId: s.shopId,
+      shopName: s.shopName,
+      record_count: s.record_count,
+    })),
+    metrics,
+    matrix,
+    kpis: Object.fromEntries(shopSummaries.map((s) => [s.shopId, s.kpis])),
+  });
+});
+
+// GET /api/store-reports/analytics/v2/period-compare
+// Compare ANY two custom date periods, for selected shops
+const getAnalyticsV2PeriodCompare = asyncHandler(async (req, res) => {
+  const { current_from, current_to, compare_from, compare_to, report_type, view } = req.query;
+
+  if (!current_from || !current_to || !compare_from || !compare_to) {
+    throw new AppError('current_from, current_to, compare_from, compare_to are all required', 400);
+  }
+
+  const shopIds = parseShopIds(req.query);
+  const metrics = parseMetricKeys(req.query);
+
+  const [current, compare] = await Promise.all([
+    fetchRecordsForPeriod({
+      fromDate: new Date(current_from),
+      toDate: new Date(current_to),
+      shopIds,
+      reportType: report_type,
+      view,
+    }),
+    fetchRecordsForPeriod({
+      fromDate: new Date(compare_from),
+      toDate: new Date(compare_to),
+      shopIds,
+      reportType: report_type,
+      view,
+    }),
+  ]);
+
+  const curTotal = sumFullMetrics(current);
+  const cmpTotal = sumFullMetrics(compare);
+
+  const currentByShop = groupRecordsByShop(current);
+  const compareByShopMap = new Map(groupRecordsByShop(compare).map((s) => [s.shopId, s]));
+
+  // All shops appearing in either period
+  const allShopIds = new Set([
+    ...currentByShop.map((s) => s.shopId),
+    ...Array.from(compareByShopMap.keys()),
+  ]);
+
+  const shopData = Array.from(allShopIds).map((shopId) => {
+    const curShop = currentByShop.find((s) => s.shopId === shopId);
+    const cmpShop = compareByShopMap.get(shopId);
+    const curKpis = curShop ? sumFullMetrics(curShop.records) : null;
+    const cmpKpis = cmpShop ? sumFullMetrics(cmpShop.records) : null;
+    const shopName = curShop?.shopName || cmpShop?.shopName || shopId;
+
+    return {
+      shopId,
+      shopName,
+      current: curKpis,
+      compare: cmpKpis,
+      delta: curKpis && cmpKpis ? deltaMetrics(curKpis, cmpKpis) : null,
+    };
+  });
+
+  shopData.sort((a, b) => (b.current?.grossSales || 0) - (a.current?.grossSales || 0));
+
+  return sendSuccess(res, 'Period comparison fetched successfully', {
+    current_period: { from: current_from, to: current_to, record_count: current.length },
+    compare_period: { from: compare_from, to: compare_to, record_count: compare.length },
+    metrics,
+    total: {
+      current: curTotal,
+      compare: cmpTotal,
+      delta: deltaMetrics(curTotal, cmpTotal),
+    },
+    shops: shopData,
+  });
+});
+
+// GET /api/store-reports/analytics/v2/trend
+// Time series for one or more metrics, per shop or combined
+const getAnalyticsV2Trend = asyncHandler(async (req, res) => {
+  const { from_date, to_date, report_type, view } = req.query;
+  const granularity = req.query.granularity === 'month' ? 'month' : 'week';
+  const shopIds = parseShopIds(req.query);
+  const metrics = parseMetricKeys(req.query);
+  const groupByShop = req.query.group_by === 'shop';
+
+  const records = await fetchRecordsForPeriod({
+    fromDate: from_date ? new Date(from_date) : null,
+    toDate: to_date ? new Date(to_date) : null,
+    shopIds,
+    reportType: report_type,
+    view,
+  });
+
+  // Build combined time series
+  const totalMap = new Map();
+  records.forEach((rec) => {
+    const key = buildPeriodSeriesKey(rec, granularity);
+    if (!totalMap.has(key)) {
+      totalMap.set(key, {
+        periodKey: key,
+        label: buildPeriodLabel(rec, granularity),
+        year: rec.year,
+        month: rec.month,
+        weekNumber: granularity === 'week' ? rec.week_number : null,
+        records: [],
+      });
+    }
+    totalMap.get(key).records.push(rec);
+  });
+
+  const totalSeries = Array.from(totalMap.values())
+    .map((bucket) => {
+      const kpis = sumFullMetrics(bucket.records);
+      const point = {
+        periodKey: bucket.periodKey,
+        label: bucket.label,
+        year: bucket.year,
+        month: bucket.month,
+        weekNumber: bucket.weekNumber,
+      };
+      metrics.forEach((m) => {
+        point[m] = kpis[m] ?? 0;
+      });
+      return point;
+    })
+    .sort((a, b) => {
+      if (a.year !== b.year) return a.year - b.year;
+      if (a.month !== b.month) return a.month - b.month;
+      return (a.weekNumber || 0) - (b.weekNumber || 0);
+    });
+
+  let shopSeries = null;
+  if (groupByShop) {
+    const byShop = groupRecordsByShop(records);
+    shopSeries = byShop.map((shop) => {
+      const shopMap = new Map();
+      shop.records.forEach((rec) => {
+        const key = buildPeriodSeriesKey(rec, granularity);
+        if (!shopMap.has(key)) {
+          shopMap.set(key, {
+            periodKey: key,
+            label: buildPeriodLabel(rec, granularity),
+            year: rec.year,
+            month: rec.month,
+            weekNumber: granularity === 'week' ? rec.week_number : null,
+            records: [],
+          });
+        }
+        shopMap.get(key).records.push(rec);
+      });
+
+      const series = Array.from(shopMap.values())
+        .map((bucket) => {
+          const kpis = sumFullMetrics(bucket.records);
+          const point = {
+            periodKey: bucket.periodKey,
+            label: bucket.label,
+            year: bucket.year,
+            month: bucket.month,
+            weekNumber: bucket.weekNumber,
+          };
+          metrics.forEach((m) => {
+            point[m] = kpis[m] ?? 0;
+          });
+          return point;
+        })
+        .sort((a, b) => {
+          if (a.year !== b.year) return a.year - b.year;
+          if (a.month !== b.month) return a.month - b.month;
+          return (a.weekNumber || 0) - (b.weekNumber || 0);
+        });
+
+      const overallKpis = sumFullMetrics(shop.records);
+      return {
+        shopId: shop.shopId,
+        shopName: shop.shopName,
+        total: Object.fromEntries(metrics.map((m) => [m, overallKpis[m] ?? 0])),
+        series,
+      };
+    });
+    shopSeries.sort(
+      (a, b) =>
+        (b.total.grossSales || b.total[metrics[0]] || 0) -
+        (a.total.grossSales || a.total[metrics[0]] || 0)
+    );
+  }
+
+  return sendSuccess(res, 'Trend data fetched successfully', {
+    period: { from: from_date || null, to: to_date || null },
+    granularity,
+    metrics,
+    group_by: groupByShop ? 'shop' : 'total',
+    total: {
+      kpis: Object.fromEntries(metrics.map((m) => [m, sumFullMetrics(records)[m] ?? 0])),
+      series: totalSeries,
+    },
+    shops: shopSeries,
+    data_points: totalSeries.length,
+  });
+});
+
 module.exports = {
   importExcelData,
   importHistoricalWorkbookData,
@@ -2982,4 +3496,9 @@ module.exports = {
   getMonthlySale2026,
   upsertSingleMonthlySale2026,
   exportExcel,
+  // v2 analytics
+  getAnalyticsV2KpiMatrix,
+  getAnalyticsV2ShopCompare,
+  getAnalyticsV2PeriodCompare,
+  getAnalyticsV2Trend,
 };

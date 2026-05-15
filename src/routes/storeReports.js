@@ -15,6 +15,10 @@ const {
   getMonthlySale2026,
   upsertSingleMonthlySale2026,
   exportExcel,
+  getAnalyticsV2KpiMatrix,
+  getAnalyticsV2ShopCompare,
+  getAnalyticsV2PeriodCompare,
+  getAnalyticsV2Trend,
 } = require('../controllers/storeReportController');
 const { protect } = require('../middleware/authMiddleware');
 const { requirePermission } = require('../middleware/permMiddleware');
@@ -96,5 +100,31 @@ router.post(
 
 // Export
 router.get('/export', protect, requirePermission('can_view_all_staff'), exportExcel);
+
+// ── Analytics v2 — flexible KPI matrix, shop/period compare, trends ──────────
+router.get(
+  '/analytics/v2/kpi-matrix',
+  protect,
+  requirePermission('can_view_all_staff'),
+  getAnalyticsV2KpiMatrix
+);
+router.get(
+  '/analytics/v2/shop-compare',
+  protect,
+  requirePermission('can_view_all_staff'),
+  getAnalyticsV2ShopCompare
+);
+router.get(
+  '/analytics/v2/period-compare',
+  protect,
+  requirePermission('can_view_all_staff'),
+  getAnalyticsV2PeriodCompare
+);
+router.get(
+  '/analytics/v2/trend',
+  protect,
+  requirePermission('can_view_all_staff'),
+  getAnalyticsV2Trend
+);
 
 module.exports = router;
