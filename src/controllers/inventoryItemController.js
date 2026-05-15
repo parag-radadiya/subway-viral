@@ -1,10 +1,12 @@
 const InventoryItem = require('../models/InventoryItem');
 const InventoryQuery = require('../models/InventoryQuery');
+const Shop = require('../models/Shop');
 const AppError = require('../utils/AppError');
 const asyncHandler = require('../utils/asyncHandler');
 const { sendSuccess } = require('../utils/response');
 const { buildShopScope, isShopAllowed } = require('../middleware/shopScopeMiddleware');
 const { recordInventoryAudit } = require('../utils/inventoryAudit');
+const notificationService = require('../services/notificationService');
 
 function buildInventoryScope(user) {
   const permissions = user?.role_id?.permissions || {};
@@ -111,6 +113,14 @@ const createItem = asyncHandler(async (req, res) => {
     afterState: item,
   });
 
+  // Fire-and-forget: notify managers of new inventory item
+  const shop = await Shop.findById(item.shop_id).select('name');
+  notificationService.notifyInventoryItemCreated({
+    item,
+    performer: req.user,
+    shopName: shop?.name,
+  });
+
   return sendSuccess(res, 'Inventory item created successfully', { item }, 201);
 });
 
@@ -138,6 +148,16 @@ const updateItem = asyncHandler(async (req, res) => {
     beforeState,
     afterState: item,
   });
+
+  // Fire-and-forget: notify when item flips to Damaged
+  if (beforeState.status !== 'Damaged' && item.status === 'Damaged') {
+    const shop = await Shop.findById(item.shop_id).select('name');
+    notificationService.notifyInventoryItemDamaged({
+      item,
+      performer: req.user,
+      shopName: shop?.name,
+    });
+  }
 
   return sendSuccess(res, 'Inventory item updated successfully', { item });
 });

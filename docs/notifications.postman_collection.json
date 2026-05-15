@@ -1,0 +1,275 @@
+{
+  "info": {
+    "name": "Subway — Notifications",
+    "description": "Admin notification API. All endpoints scoped to the logged-in user. Replace {{jwt}} with a Bearer token from POST /api/auth/login.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_postman_id": "subway-notifications-v1"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:3000", "type": "string" },
+    { "key": "jwt", "value": "PASTE_YOUR_BEARER_TOKEN_HERE", "type": "string" },
+    { "key": "notification_id", "value": "PASTE_AN_ID_FROM_LIST_RESPONSE", "type": "string" }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{jwt}}", "type": "string" }]
+  },
+  "item": [
+    {
+      "name": "Setup — login + categories",
+      "item": [
+        {
+          "name": "Login (get JWT)",
+          "request": {
+            "method": "POST",
+            "auth": { "type": "noauth" },
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@example.com\",\n  \"password\": \"YOUR_PASSWORD\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/login",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "login"]
+            }
+          }
+        },
+        {
+          "name": "List categories / event types / severities",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/notifications/categories",
+              "host": ["{{base_url}}"],
+              "path": ["api", "notifications", "categories"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Read",
+      "item": [
+        {
+          "name": "Unread count (bell badge)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/notifications/unread-count",
+              "host": ["{{base_url}}"],
+              "path": ["api", "notifications", "unread-count"]
+            }
+          }
+        },
+        {
+          "name": "Summary (dashboard widget)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/notifications/summary",
+              "host": ["{{base_url}}"],
+              "path": ["api", "notifications", "summary"]
+            }
+          }
+        },
+        {
+          "name": "List — all unread",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/notifications?read=false&page=1&limit=20",
+              "host": ["{{base_url}}"],
+              "path": ["api", "notifications"],
+              "query": [
+                { "key": "read", "value": "false" },
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "20" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "List — attendance unread only",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/notifications?category=attendance&read=false&page=1&limit=20",
+              "host": ["{{base_url}}"],
+              "path": ["api", "notifications"],
+              "query": [
+                { "key": "category", "value": "attendance" },
+                { "key": "read", "value": "false" },
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "20" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "List — critical only",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/notifications?severity=critical&read=false",
+              "host": ["{{base_url}}"],
+              "path": ["api", "notifications"],
+              "query": [
+                { "key": "severity", "value": "critical" },
+                { "key": "read", "value": "false" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "List — inventory category",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/notifications?category=inventory&page=1&limit=20",
+              "host": ["{{base_url}}"],
+              "path": ["api", "notifications"],
+              "query": [
+                { "key": "category", "value": "inventory" },
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "20" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "List — rota category",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/notifications?category=rota&page=1&limit=20",
+              "host": ["{{base_url}}"],
+              "path": ["api", "notifications"],
+              "query": [
+                { "key": "category", "value": "rota" },
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "20" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "List — system category",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/notifications?category=system&page=1&limit=20",
+              "host": ["{{base_url}}"],
+              "path": ["api", "notifications"],
+              "query": [
+                { "key": "category", "value": "system" },
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "20" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Mark read / archive",
+      "item": [
+        {
+          "name": "Mark single read",
+          "request": {
+            "method": "PATCH",
+            "url": {
+              "raw": "{{base_url}}/api/notifications/{{notification_id}}/read",
+              "host": ["{{base_url}}"],
+              "path": ["api", "notifications", "{{notification_id}}", "read"]
+            }
+          }
+        },
+        {
+          "name": "Mark all read (every category)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{}" },
+            "url": {
+              "raw": "{{base_url}}/api/notifications/mark-all-read",
+              "host": ["{{base_url}}"],
+              "path": ["api", "notifications", "mark-all-read"]
+            }
+          }
+        },
+        {
+          "name": "Mark all read — attendance only",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"category\": \"attendance\"\n}" },
+            "url": {
+              "raw": "{{base_url}}/api/notifications/mark-all-read",
+              "host": ["{{base_url}}"],
+              "path": ["api", "notifications", "mark-all-read"]
+            }
+          }
+        },
+        {
+          "name": "Archive (soft delete)",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{base_url}}/api/notifications/{{notification_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "notifications", "{{notification_id}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Background scan (admin / cron)",
+      "item": [
+        {
+          "name": "Scan ALL (missed punch-in + missed punch-out)",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{base_url}}/api/notifications/scan?target=all&grace_minutes=30",
+              "host": ["{{base_url}}"],
+              "path": ["api", "notifications", "scan"],
+              "query": [
+                { "key": "target", "value": "all" },
+                { "key": "grace_minutes", "value": "30" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Scan — missed punch-in only",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{base_url}}/api/notifications/scan?target=missed_punch_in&grace_minutes=30",
+              "host": ["{{base_url}}"],
+              "path": ["api", "notifications", "scan"],
+              "query": [
+                { "key": "target", "value": "missed_punch_in" },
+                { "key": "grace_minutes", "value": "30" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Scan — missed punch-out only",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{base_url}}/api/notifications/scan?target=missed_punch_out",
+              "host": ["{{base_url}}"],
+              "path": ["api", "notifications", "scan"],
+              "query": [{ "key": "target", "value": "missed_punch_out" }]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

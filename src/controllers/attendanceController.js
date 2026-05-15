@@ -5,6 +5,7 @@ const Attendance = require('../models/Attendance');
 const Rota = require('../models/Rota');
 const User = require('../models/User');
 const Shop = require('../models/Shop');
+const notificationService = require('../services/notificationService');
 const AppError = require('../utils/AppError');
 const asyncHandler = require('../utils/asyncHandler');
 const { sendSuccess } = require('../utils/response');
@@ -758,6 +759,15 @@ const punchIn = asyncHandler(async (req, res) => {
     },
   ]);
 
+  // Fire-and-forget: notify if this punch-in was late
+  const shop = await Shop.findById(shop_id).select('name');
+  notificationService.notifyLatePunchIn({
+    attendance,
+    rota: matchedRota,
+    user: req.user,
+    shopName: shop?.name,
+  });
+
   return sendSuccess(res, 'Punch-in successful', { attendance: populated }, 201);
 });
 
@@ -841,6 +851,15 @@ const manualPunchIn = asyncHandler(async (req, res) => {
       select: 'shift_start shift_end shift_date start_time end_time note shop_id user_id',
     },
   ]);
+
+  // Fire-and-forget: notify admins of manual punch-in
+  const shop = await Shop.findById(shop_id).select('name');
+  notificationService.notifyManualPunchIn({
+    attendance,
+    performer: req.user,
+    targetUser: populated.user_id,
+    shopName: shop?.name,
+  });
 
   return sendSuccess(res, 'Manual punch-in successful', { attendance: populated }, 201);
 });
@@ -1735,6 +1754,15 @@ const bulkAdjustClosedAttendanceByShop = asyncHandler(async (req, res) => {
   );
 
   await Attendance.insertMany(docsToInsert);
+
+  // Fire-and-forget: notify admins of bulk adjustment
+  notificationService.notifyAttendanceAdjusted({
+    batchId,
+    performer: req.user,
+    shopId: shop_id,
+    shopName: shop.name,
+    affectedCount: selectedUserIds.length,
+  });
 
   return sendSuccess(res, 'Bulk attendance hours adjustment applied successfully', {
     shop_id,

@@ -1,10 +1,12 @@
 const InventoryQuery = require('../models/InventoryQuery');
 const InventoryItem = require('../models/InventoryItem');
+const Shop = require('../models/Shop');
 const AppError = require('../utils/AppError');
 const asyncHandler = require('../utils/asyncHandler');
 const { sendSuccess } = require('../utils/response');
 const { buildShopScope, isShopAllowed } = require('../middleware/shopScopeMiddleware');
 const { recordInventoryAudit } = require('../utils/inventoryAudit');
+const notificationService = require('../services/notificationService');
 
 function buildInventoryScope(user) {
   const permissions = user?.role_id?.permissions || {};
@@ -179,6 +181,14 @@ const createQuery = asyncHandler(async (req, res) => {
     { path: 'reported_by', select: 'name email' },
   ]);
 
+  // Fire-and-forget: notify managers of new inventory issue
+  notificationService.notifyInventoryQueryOpened({
+    query,
+    performer: req.user,
+    itemName: populated.item_id?.item_name || item.item_name,
+    shopName: populated.shop_id?.name,
+  });
+
   return sendSuccess(
     res,
     'Query opened and item marked as Damaged',
@@ -245,6 +255,16 @@ const closeQuery = asyncHandler(async (req, res) => {
     { path: 'item_id', select: 'item_name status' },
     { path: 'resolved_by', select: 'name email' },
   ]);
+
+  // Fire-and-forget: notify managers that the inventory issue is resolved
+  const shop = await Shop.findById(query.shop_id).select('name');
+  notificationService.notifyInventoryQueryClosed({
+    query,
+    performer: req.user,
+    itemName: populated.item_id?.item_name,
+    shopName: shop?.name,
+    repairCost: query.repair_cost,
+  });
 
   return sendSuccess(res, `Query closed and item status set to ${nextItemStatus}`, {
     query: populated,
