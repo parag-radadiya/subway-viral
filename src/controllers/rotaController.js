@@ -5,6 +5,7 @@ const asyncHandler = require('../utils/asyncHandler');
 const { sendSuccess } = require('../utils/response');
 const { buildShopScope, isShopAllowed } = require('../middleware/shopScopeMiddleware');
 const { parsePagination, toPageMeta } = require('../utils/pagination');
+const notificationService = require('../services/notificationService');
 
 const DEFAULT_MIN_SHIFT_DURATION_HOURS = 2;
 const DEFAULT_MAX_SHIFT_DURATION_HOURS = 8;
@@ -617,6 +618,18 @@ const bulkCreate = asyncHandler(async (req, res) => {
   });
 
   if (result) created = result.length;
+
+  // Fire-and-forget: notify managers of bulk rota publish
+  if (created > 0) {
+    const shop = await Shop.findById(shop_id).select('name');
+    notificationService.notifyRotaPublished({
+      shopId: shop_id,
+      shopName: shop?.name,
+      performer: req.user,
+      weekStart: week_start,
+      createdCount: created,
+    });
+  }
 
   return sendSuccess(
     res,

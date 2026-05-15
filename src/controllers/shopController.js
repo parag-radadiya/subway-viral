@@ -8,6 +8,7 @@ const {
   isShopAllowed,
   buildReadScope,
 } = require('../middleware/shopScopeMiddleware');
+const notificationService = require('../services/notificationService');
 
 const normalizeTime = (value) =>
   value === undefined || value === null ? null : String(value).trim();
@@ -178,6 +179,17 @@ const updateShopHours = asyncHandler(async (req, res) => {
   });
 
   await shop.save();
+
+  // Fire-and-forget: notify admins of shop hours change
+  notificationService.notifyShopHoursChanged({
+    shop,
+    performer: req.user,
+    prevOpening: shop.shop_time_history?.[shop.shop_time_history.length - 2]?.opening_time || null,
+    prevClosing: shop.shop_time_history?.[shop.shop_time_history.length - 2]?.closing_time || null,
+    nextOpening: shop.opening_time,
+    nextClosing: shop.closing_time,
+  });
+
   return sendSuccess(res, 'Shop operating hours updated successfully', {
     shop,
   });

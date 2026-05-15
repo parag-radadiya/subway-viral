@@ -4,6 +4,7 @@ const AppError = require('../utils/AppError');
 const asyncHandler = require('../utils/asyncHandler');
 const { sendSuccess } = require('../utils/response');
 const { parsePagination, toPageMeta } = require('../utils/pagination');
+const notificationService = require('../services/notificationService');
 const {
   buildShopScope,
   isShopAllowed,
@@ -176,6 +177,13 @@ const createUser = asyncHandler(async (req, res) => {
   });
 
   const populated = await user.populate('role_id', 'role_name');
+
+  // Fire-and-forget: notify admins of new user onboarding
+  notificationService.notifyUserCreated({
+    user: populated,
+    performer: req.user,
+  });
+
   return sendSuccess(res, 'User created successfully', { user: populated }, 201);
 });
 
