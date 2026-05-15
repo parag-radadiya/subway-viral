@@ -34,8 +34,23 @@ function buildBaseFilter(req) {
   return filter;
 }
 
+// Fire-and-forget opportunistic scan. Called from every notification read
+// endpoint. Internally throttled so the actual DB scan only runs once every
+// NOTIFICATION_SCAN_INTERVAL_MS (default 10 min) regardless of poll volume.
+// Only triggered for users who can act on attendance notifications.
+function maybeTriggerScanForRequest(req) {
+  const perms = req.user?.role_id?.permissions || {};
+  const canSeeAttendance =
+    perms.can_view_all_staff || perms.can_manage_rotas || perms.can_adjust_attendance_hours;
+  if (canSeeAttendance) {
+    notificationService.triggerBackgroundScan({ target: 'all' });
+  }
+}
+
 // GET /api/notifications
 const listNotifications = asyncHandler(async (req, res) => {
+  maybeTriggerScanForRequest(req);
+
   const filter = buildBaseFilter(req);
   const { page, limit, skip } = parsePagination(req.query, {
     defaultSortBy: 'createdAt',
@@ -62,6 +77,8 @@ const listNotifications = asyncHandler(async (req, res) => {
 // GET /api/notifications/unread-count
 // Returns badge counts per category + total
 const getUnreadCount = asyncHandler(async (req, res) => {
+  maybeTriggerScanForRequest(req);
+
   const baseFilter = { recipient_id: req.user._id, archived_at: null, read_at: null };
 
   const [total, byCategory] = await Promise.all([
@@ -86,11 +103,12 @@ const getUnreadCount = asyncHandler(async (req, res) => {
 // GET /api/notifications/summary
 // Quick dashboard view: unread + recent items per category
 const getSummary = asyncHandler(async (req, res) => {
+  maybeTriggerScanForRequest(req);
+
   const baseFilter = { recipient_id: req.user._id, archived_at: null };
 
   const result = {};
   for (const cat of CATEGORIES) {
-     
     const [unread, latest] = await Promise.all([
       Notification.countDocuments({ ...baseFilter, category: cat, read_at: null }),
       Notification.find({ ...baseFilter, category: cat })

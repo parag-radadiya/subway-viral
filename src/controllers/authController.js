@@ -5,6 +5,7 @@ const AppError = require('../utils/AppError');
 const asyncHandler = require('../utils/asyncHandler');
 const { sendSuccess } = require('../utils/response');
 const { reconcileUserOverdueAutoPunchOuts } = require('../utils/attendanceReconcile');
+const notificationService = require('../services/notificationService');
 
 const generateToken = (id) =>
   jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN });
@@ -73,6 +74,16 @@ const login = asyncHandler(async (req, res) => {
 
   await reconcileUserOverdueAutoPunchOuts(user._id, { limit: 200 });
   const tokens = await issueAuthTokens(user);
+
+  // Opportunistic notification scan — fire-and-forget, throttled to once per
+  // NOTIFICATION_SCAN_INTERVAL_MS (default 10 min) regardless of login volume.
+  // Only triggers for users who can act on the notifications (admins/managers).
+  const perms = user.role_id?.permissions || {};
+  const canSeeAttendance =
+    perms.can_view_all_staff || perms.can_manage_rotas || perms.can_adjust_attendance_hours;
+  if (canSeeAttendance) {
+    notificationService.triggerBackgroundScan({ target: 'all' });
+  }
 
   return sendSuccess(res, 'Login successful', buildLoginPayload(user, tokens));
 });

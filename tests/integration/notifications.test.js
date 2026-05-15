@@ -336,6 +336,17 @@ describe('Notifications integration', () => {
     );
   });
 
+  it('NOTIF-012b: scan throttler skips repeat calls within the interval', async () => {
+    // Run two scans back-to-back. Whichever runs first should succeed; the
+    // second must be throttled (since the throttle window is 10 minutes).
+    // We don't assume the first one wasn't already triggered by an earlier
+    // test — we only assert the throttle kicks in for the second consecutive call.
+    await notificationService.maybeRunScan({ target: 'all' });
+    const second = await notificationService.maybeRunScan({ target: 'all' });
+    expect(second.skipped).toBe(true);
+    expect(second.reason).toBe('throttled');
+  });
+
   it('NOTIF-013: notifyInventoryQueryOpened fires from POST /api/inventory/queries', async () => {
     const adminLogin = await login('admin@org.com', 'Admin@1234');
 

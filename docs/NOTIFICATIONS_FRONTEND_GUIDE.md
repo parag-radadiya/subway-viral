@@ -4,51 +4,96 @@ Complete reference for building the admin notification bell / inbox / toasts.
 
 - **Base URL (local dev):** `http://localhost:3000`
 - **Auth:** Bearer JWT in `Authorization` header
-- **Permission:** Any authenticated user. Notifications are scoped per-recipient — each user only sees their own.
+- **Permission:** Any authenticated user can hit these endpoints. Each user only sees notifications addressed to them — fan-out is decided by the backend based on role + shop scope.
 
 ---
 
 ## Table of Contents
 
-1. [Concept](#1-concept)
-2. [Notification anatomy](#2-notification-anatomy)
-3. [Categories, severities & event types](#3-categories-severities--event-types)
-4. [Endpoints](#4-endpoints)
-5. [Auto-fired events (no API needed)](#5-auto-fired-events-no-api-needed)
-6. [Background scan endpoint (cron)](#6-background-scan-endpoint-cron)
-7. [Recommended UI patterns](#7-recommended-ui-patterns)
-8. [Postman collection JSON](#8-postman-collection-json)
+1. [Concept — no cron needed](#1-concept--no-cron-needed)
+2. [Role × Category visibility matrix](#2-role--category-visibility-matrix)
+3. [Notification anatomy](#3-notification-anatomy)
+4. [Event-type catalogue (14)](#4-event-type-catalogue-14)
+5. [Endpoints](#5-endpoints)
+6. [What the frontend needs to show](#6-what-the-frontend-needs-to-show)
+7. [Postman collection JSON](#7-postman-collection-json)
+8. [Quick-start checklist](#8-quick-start-checklist)
 
 ---
 
-## 1. Concept
+## 1. Concept — no cron needed
 
-Backend automatically creates notifications whenever a noteworthy event happens (someone is late, an item gets damaged, rota gets published, etc.). Each event is **fanned out** to all admins/managers with the right permission and shop scope.
+Most events (late punch-in, query opened, rota published, etc.) fire **synchronously** when the action happens in their own API endpoint — those create notifications on the spot, no scan required.
 
-The frontend's job is just:
+Two events are **absences** — they fire only when a scan detects something missing:
 
-- Show a **bell icon with badge count** (poll `/unread-count` every 30–60 s)
-- Show a **dropdown / drawer** with a list (`/`)
-- Optionally show **toasts** for new critical-severity items
-- Provide **filter chips** for category (Attendance / Inventory / Rota / System)
+- `MISSED_PUNCH_IN` — staff has a rota but no `punch_in`
+- `MISSED_PUNCH_OUT` — shift ended, no manual `punch_out`
 
-You don't need to create notifications yourself — just read and mark them read.
+Since the project has **no VPC / cron infrastructure**, the scan runs **opportunistically** instead. It is triggered automatically on:
+
+| Trigger                               | When                                   |
+| ------------------------------------- | -------------------------------------- |
+| `POST /api/auth/login`                | Every login by an admin/manager        |
+| `GET /api/notifications`              | Every list call                        |
+| `GET /api/notifications/unread-count` | Every badge poll (every 30–60 s on FE) |
+| `GET /api/notifications/summary`      | Dashboard widget load                  |
+
+The scan is **internally throttled** to one actual DB pass every **10 minutes** (configurable via `NOTIFICATION_SCAN_INTERVAL_MS` env var). So even if the FE polls the badge every 30 seconds, the DB only runs the missed-punch scan 6 times an hour. Triggers fire-and-forget — they don't slow down the parent request.
+
+**This means: the frontend just polls the bell badge as normal. Missed punches will appear automatically.**
+
+If you still want a deterministic manual trigger (e.g. an admin "refresh" button), you can still call `POST /api/notifications/scan` — it bypasses the throttle.
 
 ---
 
-## 2. Notification anatomy
+## 2. Role × Category visibility matrix
+
+Notifications are fanned out only to users whose role has the required permissions. With the system's default 5 roles, here's exactly who sees what:
+
+| Category       | Required permission(s)                                                      | Root | Admin | Manager | Sub-Manager | Staff |
+| -------------- | --------------------------------------------------------------------------- | :--: | :---: | :-----: | :---------: | :---: |
+| **attendance** | `can_view_all_staff` OR `can_manage_rotas` OR `can_adjust_attendance_hours` |  ✅  |  ✅   |   ✅    |     ❌      |  ❌   |
+| **inventory**  | `can_manage_inventory`                                                      |  ✅  |  ✅   |   ✅    |     ✅      |  ❌   |
+| **rota**       | `can_manage_rotas`                                                          |  ✅  |  ✅   |   ✅    |     ❌      |  ❌   |
+| **system**     | `can_manage_shops` OR `can_manage_roles` OR `can_create_users`              |  ✅  |  ✅   |   ❌    |     ❌      |  ❌   |
+
+**Shop scope:** if a user has `assigned_shop_ids` set, they only see notifications for those shops. Users with no assignment receive notifications from every shop.
+
+### What the FE should hide based on role
+
+- **Staff** — hide the bell icon entirely (no notifications)
+- **Sub-Manager** — only show the Inventory tab
+- **Manager** — show Attendance, Inventory, Rota (hide System)
+- **Admin / Root** — show all four tabs
+
+The backend already returns an empty list for users who don't qualify, but hiding the UI is cleaner. Drive this off the role you get back from `POST /api/auth/login`:
+
+```ts
+const TABS_BY_ROLE = {
+  Root: ['attendance', 'inventory', 'rota', 'system'],
+  Admin: ['attendance', 'inventory', 'rota', 'system'],
+  Manager: ['attendance', 'inventory', 'rota'],
+  'Sub-Manager': ['inventory'],
+  Staff: [],
+};
+```
+
+---
+
+## 3. Notification anatomy
 
 ```json
 {
   "_id": "65fb...",
-  "recipient_id": "65fa...", // current user
-  "category": "attendance", // attendance | inventory | rota | system
+  "recipient_id": "65fa...",
+  "category": "attendance",
   "event_type": "LATE_PUNCH_IN",
-  "severity": "warning", // info | warning | critical
+  "severity": "warning",
   "title": "John Smith punched in late",
   "message": "John Smith punched in 45 minutes after the scheduled shift start at Camden.",
-  "actor_id": { "_id": "...", "name": "John Smith" }, // who did the action
-  "target_user_id": { "_id": "...", "name": "John Smith" }, // who the action is about
+  "actor_id": { "_id": "...", "name": "John Smith" },
+  "target_user_id": { "_id": "...", "name": "John Smith" },
   "shop_id": { "_id": "...", "name": "Camden" },
   "attendance_id": "65...",
   "rota_id": "65...",
@@ -56,77 +101,66 @@ You don't need to create notifications yourself — just read and mark them read
   "inventory_query_id": null,
   "metadata": { "late_minutes": 45 },
   "dedupe_key": "LATE_PUNCH_IN::65...",
-  "read_at": null, // null = unread
+  "read_at": null,
   "archived_at": null,
   "createdAt": "2026-05-15T14:23:01.000Z",
   "updatedAt": "2026-05-15T14:23:01.000Z"
 }
 ```
 
-### Field-by-field reference
-
-| Field             | Type                   | Notes                                                           |
-| ----------------- | ---------------------- | --------------------------------------------------------------- |
-| `category`        | enum                   | Use this for the **badge tabs** in your UI                      |
-| `event_type`      | enum                   | Specific code — drives icon/color choice                        |
-| `severity`        | enum                   | `info` (gray) / `warning` (amber) / `critical` (red)            |
-| `title`           | string                 | Short headline for list/toast                                   |
-| `message`         | string                 | Full sentence for dropdown body                                 |
-| `actor_id`        | populated User \| null | Person who performed the action                                 |
-| `target_user_id`  | populated User \| null | Person the action is about (e.g. the late staffer)              |
-| `shop_id`         | populated Shop \| null | Which shop — for filtering                                      |
-| `*_id` other refs | ObjectId \| null       | For deep-linking (click to go to that attendance / rota / item) |
-| `metadata`        | object                 | Free-form extras (e.g. `late_minutes`, `repair_cost`)           |
-| `read_at`         | Date \| null           | When marked read                                                |
-| `archived_at`     | Date \| null           | When archived (won't show in list)                              |
+| Field                                        | Type                   | Notes                                                               |
+| -------------------------------------------- | ---------------------- | ------------------------------------------------------------------- |
+| `category`                                   | enum                   | `attendance` / `inventory` / `rota` / `system` — drives filter tabs |
+| `event_type`                                 | enum                   | Specific event code — drives icon/color                             |
+| `severity`                                   | enum                   | `info` (gray) / `warning` (amber) / `critical` (red)                |
+| `title`                                      | string                 | Short headline for list/toast                                       |
+| `message`                                    | string                 | Full sentence for dropdown body                                     |
+| `actor_id`                                   | populated User \| null | Who did the action                                                  |
+| `target_user_id`                             | populated User \| null | Who the action is about                                             |
+| `shop_id`                                    | populated Shop \| null | Which shop                                                          |
+| `attendance_id`, `rota_id`, `inventory_*_id` | ObjectId \| null       | Deep-link refs                                                      |
+| `metadata`                                   | object                 | Free-form extras (e.g. `late_minutes`, `repair_cost`)               |
+| `read_at`                                    | Date \| null           | `null` = unread                                                     |
+| `archived_at`                                | Date \| null           | `null` = visible; non-null = hidden                                 |
 
 ---
 
-## 3. Categories, severities & event types
+## 4. Event-type catalogue (14)
 
-### Categories (4)
+### Attendance (6 events) — for Root / Admin / Manager
 
-| Category     | Description                                                     | Who receives it                                                           |
-| ------------ | --------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| `attendance` | Late punches, missed punches, auto-punch-outs, bulk adjustments | `can_view_all_staff` / `can_manage_rotas` / `can_adjust_attendance_hours` |
-| `inventory`  | New items, item damaged, query opened/closed                    | `can_manage_inventory`                                                    |
-| `rota`       | Bulk rota published                                             | `can_manage_rotas`                                                        |
-| `system`     | Shop hours changed, new user created                            | `can_manage_shops` / `can_manage_roles` / `can_create_users`              |
+| Event type            | Trigger                                        | Severity                                 | What FE shows                                         |
+| --------------------- | ---------------------------------------------- | ---------------------------------------- | ----------------------------------------------------- |
+| `LATE_PUNCH_IN`       | Staff punched in 30+ min after shift_start     | `info` (30–59 min) / `warning` (60+ min) | "John punched in 45 min late at Camden"               |
+| `MISSED_PUNCH_IN`     | Scan detected: shift started, no punch yet     | `critical`                               | "John missed his punch-in (30 min after shift start)" |
+| `AUTO_PUNCH_OUT`      | System auto-punched out 2 h after shift end    | `warning`                                | "John forgot to punch out — auto-punched at 23:00"    |
+| `MISSED_PUNCH_OUT`    | Scan detected: shift ended, still no punch_out | `warning`                                | "Sarah did not punch out on time at Baker St"         |
+| `MANUAL_PUNCH_IN`     | Sub-manager manually punched in someone        | `info`                                   | "Manager punched in Sarah at Camden"                  |
+| `ATTENDANCE_ADJUSTED` | Admin ran bulk hours adjust                    | `info`                                   | "Admin adjusted hours for 5 staff at Camden"          |
 
-### Severities (3)
+### Inventory (4 events) — for Root / Admin / Manager / Sub-Manager
 
-| Severity   | When                                                         | Suggested UI                |
-| ---------- | ------------------------------------------------------------ | --------------------------- |
-| `info`     | Routine info (item created, rota published)                  | Gray badge, no toast        |
-| `warning`  | Late punch, item damaged, auto-punched-out, missed punch-out | Amber badge, soft toast     |
-| `critical` | Missed punch-in (staff scheduled but no show)                | Red badge, persistent toast |
+| Event type               | Trigger                        | Severity  | What FE shows                                      |
+| ------------------------ | ------------------------------ | --------- | -------------------------------------------------- |
+| `INVENTORY_QUERY_OPENED` | Damaged-item ticket opened     | `warning` | "Sarah reported issue: Coffee Machine at Baker St" |
+| `INVENTORY_QUERY_CLOSED` | Damaged-item ticket resolved   | `info`    | "Coffee Machine fixed (repair £45)"                |
+| `INVENTORY_ITEM_CREATED` | New inventory item added       | `info`    | "Sarah added 'Coffee Machine' to Baker St"         |
+| `INVENTORY_ITEM_DAMAGED` | Item status changed to Damaged | `warning` | "Coffee Machine marked damaged"                    |
 
-### Event types (14)
+### Rota (1 event) — for Root / Admin / Manager
 
-```ts
-// Attendance
-'LATE_PUNCH_IN'; // 30+ min after shift_start
-'MISSED_PUNCH_IN'; // shift started, no punch_in yet
-'AUTO_PUNCH_OUT'; // system punched them out 2h after shift end
-'MISSED_PUNCH_OUT'; // shift ended, no manual punch_out
-'MANUAL_PUNCH_IN'; // sub-manager punched someone in
-'ATTENDANCE_ADJUSTED'; // admin ran bulk-adjust
+| Event type       | Trigger                    | Severity | What FE shows                                              |
+| ---------------- | -------------------------- | -------- | ---------------------------------------------------------- |
+| `ROTA_PUBLISHED` | Weekly rota bulk-published | `info`   | "Manager published 12 rota entries for week of 2026-05-12" |
 
-// Inventory
-'INVENTORY_QUERY_OPENED'; // damaged item reported
-'INVENTORY_QUERY_CLOSED'; // damaged item fixed
-'INVENTORY_ITEM_CREATED';
-'INVENTORY_ITEM_DAMAGED'; // item status → Damaged
+### System (2 events) — for Root / Admin only
 
-// Rota
-'ROTA_PUBLISHED'; // weekly bulk publish
+| Event type           | Trigger                      | Severity | What FE shows                                 |
+| -------------------- | ---------------------------- | -------- | --------------------------------------------- |
+| `SHOP_HOURS_CHANGED` | Shop operating hours updated | `info`   | "Admin changed Camden hours"                  |
+| `USER_CREATED`       | New user onboarded           | `info`   | "Admin created account for sarah@example.com" |
 
-// System
-'SHOP_HOURS_CHANGED';
-'USER_CREATED';
-```
-
-Suggested icon/color mapping for each event type:
+### Suggested icon / color map
 
 ```ts
 const EVENT_DISPLAY = {
@@ -148,9 +182,9 @@ const EVENT_DISPLAY = {
 
 ---
 
-## 4. Endpoints
+## 5. Endpoints
 
-### 4.1 List notifications
+### 5.1 List notifications
 
 ```
 GET /api/notifications
@@ -165,7 +199,7 @@ GET /api/notifications
 | `page`      | number   | Default 1                                               |
 | `limit`     | number   | Default 20, max 200                                     |
 
-**cURL — get unread inventory notifications:**
+**Side effect:** auto-triggers a missed-punch scan if the caller can see attendance notifications (throttled to once per 10 min).
 
 ```bash
 curl -X GET "http://localhost:3000/api/notifications?category=inventory&read=false&page=1&limit=20" \
@@ -209,57 +243,44 @@ curl -X GET "http://localhost:3000/api/notifications?category=inventory&read=fal
 
 ---
 
-### 4.2 Unread count (badge)
+### 5.2 Unread count (badge)
 
 ```
 GET /api/notifications/unread-count
 ```
 
-**cURL:**
+**Side effect:** auto-triggers a missed-punch scan (throttled).
 
 ```bash
 curl -X GET "http://localhost:3000/api/notifications/unread-count" \
   -H "Authorization: Bearer YOUR_TOKEN"
 ```
 
-**Response (200):**
-
 ```json
 {
-  "status": 200,
-  "message": "Unread notification counts fetched",
   "data": {
     "total": 8,
-    "by_category": {
-      "attendance": 5,
-      "inventory": 2,
-      "rota": 1,
-      "system": 0
-    }
+    "by_category": { "attendance": 5, "inventory": 2, "rota": 1, "system": 0 }
   }
 }
 ```
 
-> Poll this every **30–60 seconds** for the bell badge. Or wire it into your existing app-level interval.
+> Poll every **30–60 seconds** for the bell badge. Each poll piggybacks the throttled scan, so missed punches surface within 10 minutes of happening.
 
 ---
 
-### 4.3 Summary (dashboard quick-view)
+### 5.3 Summary (dashboard widget)
 
 ```
 GET /api/notifications/summary
 ```
 
-Returns unread count + 3 most-recent items **for each category**. Useful for a dashboard widget with a section per category.
-
-**cURL:**
+Returns unread count + 3 most-recent items **for each category**.
 
 ```bash
 curl -X GET "http://localhost:3000/api/notifications/summary" \
   -H "Authorization: Bearer YOUR_TOKEN"
 ```
-
-**Response (200):**
 
 ```json
 {
@@ -268,7 +289,7 @@ curl -X GET "http://localhost:3000/api/notifications/summary" \
       "attendance": {
         "unread_count": 5,
         "recent": [
-          /* up to 3 notifications */
+          /* up to 3 */
         ]
       },
       "inventory": {
@@ -291,13 +312,13 @@ curl -X GET "http://localhost:3000/api/notifications/summary" \
 
 ---
 
-### 4.4 List categories / event types / severities
+### 5.4 List categories / event types / severities
 
 ```
 GET /api/notifications/categories
 ```
 
-Returns the enum constants. Use to build filter dropdowns dynamically.
+Returns enum constants for dynamic filter dropdowns.
 
 ```json
 {
@@ -311,36 +332,26 @@ Returns the enum constants. Use to build filter dropdowns dynamically.
 
 ---
 
-### 4.5 Mark single read
+### 5.5 Mark single read
 
 ```
 PATCH /api/notifications/:id/read
 ```
-
-**cURL:**
 
 ```bash
 curl -X PATCH "http://localhost:3000/api/notifications/65fb.../read" \
   -H "Authorization: Bearer YOUR_TOKEN"
 ```
 
-**Response (200):**
-
-```json
-{ "data": { "notification": { "_id": "...", "read_at": "2026-05-15T14:30:00.000Z", "..." } } }
-```
-
 ---
 
-### 4.6 Mark all read (optionally per category)
+### 5.6 Mark all read (optionally per category)
 
 ```
 POST /api/notifications/mark-all-read
 ```
 
-**Body:** `{ "category": "attendance" }` (or omit for ALL categories)
-
-**cURL — mark all attendance notifications read:**
+**Body:** `{ "category": "attendance" }` (omit for ALL)
 
 ```bash
 curl -X POST "http://localhost:3000/api/notifications/mark-all-read" \
@@ -349,15 +360,9 @@ curl -X POST "http://localhost:3000/api/notifications/mark-all-read" \
   -d '{"category": "attendance"}'
 ```
 
-**Response (200):**
-
-```json
-{ "data": { "modified": 5, "filter": { "category": "attendance" } } }
-```
-
 ---
 
-### 4.7 Archive notification
+### 5.7 Archive notification
 
 ```
 DELETE /api/notifications/:id
@@ -372,32 +377,17 @@ curl -X DELETE "http://localhost:3000/api/notifications/65fb..." \
 
 ---
 
-## 5. Auto-fired events (no API needed)
-
-These notifications are created **automatically** by the backend when the underlying action happens — frontend just consumes them:
-
-| Action                                        | Endpoint that triggers it                                                           | Notification                       |
-| --------------------------------------------- | ----------------------------------------------------------------------------------- | ---------------------------------- |
-| Staff punches in late (30+ min)               | `POST /api/attendance/punch-in`                                                     | `LATE_PUNCH_IN` (info or warning)  |
-| Manager manually punches someone in           | `POST /api/attendance/manual-punch-in`                                              | `MANUAL_PUNCH_IN` (info)           |
-| System auto-punches out (2 h after shift end) | Triggered automatically on every punch-in/-out request via `runAutoPunchOutSweep()` | `AUTO_PUNCH_OUT` (warning)         |
-| Admin runs bulk hours adjust                  | `POST /api/attendance/bulk-adjust`                                                  | `ATTENDANCE_ADJUSTED` (info)       |
-| Inventory item created                        | `POST /api/inventory/items`                                                         | `INVENTORY_ITEM_CREATED` (info)    |
-| Item updated → status = Damaged               | `PUT /api/inventory/items/:id`                                                      | `INVENTORY_ITEM_DAMAGED` (warning) |
-| Damaged-item ticket opened                    | `POST /api/inventory/queries`                                                       | `INVENTORY_QUERY_OPENED` (warning) |
-| Damaged-item ticket closed                    | `PUT /api/inventory/queries/:id/close`                                              | `INVENTORY_QUERY_CLOSED` (info)    |
-| Weekly rota published                         | `POST /api/rotas/bulk`                                                              | `ROTA_PUBLISHED` (info)            |
-| Shop hours updated                            | `PUT /api/shops/:id/hours`                                                          | `SHOP_HOURS_CHANGED` (info)        |
-| New user onboarded                            | `POST /api/users`                                                                   | `USER_CREATED` (info)              |
-
----
-
-## 6. Background scan endpoint (cron)
-
-For **missed punch-in** (staff has rota but didn't punch in) and **missed punch-out** (rota ended, no punch_out), we don't have a real event trigger — they're absences. Run this scan on a schedule:
+### 5.8 Manual scan trigger (optional)
 
 ```
-POST /api/notifications/scan?target=all
+POST /api/notifications/scan?target=all&grace_minutes=30
+```
+
+Bypasses the throttle. Useful for an admin "Refresh now" button. Requires `can_view_all_staff`.
+
+```bash
+curl -X POST "http://localhost:3000/api/notifications/scan?target=all" \
+  -H "Authorization: Bearer YOUR_TOKEN"
 ```
 
 | Query param     | Default | Description                                          |
@@ -405,36 +395,18 @@ POST /api/notifications/scan?target=all
 | `target`        | `all`   | `all` / `missed_punch_in` / `missed_punch_out`       |
 | `grace_minutes` | `30`    | How long after shift_start before flagging as missed |
 
-**cURL:**
-
-```bash
-curl -X POST "http://localhost:3000/api/notifications/scan?target=all&grace_minutes=30" \
-  -H "Authorization: Bearer YOUR_TOKEN"
-```
-
-**Response:**
-
-```json
-{
-  "data": {
-    "missed_punch_in": { "scanned": 12, "missed_count": 2, "emitted": 8 },
-    "missed_punch_out": { "scanned": 3, "emitted": 5 }
-  }
-}
-```
-
-### Production recommendation
-
-Set up a cron job (or Vercel cron) to hit this endpoint **every 15 minutes** during operating hours. Notifications are deduped via `dedupe_key` so re-running the scan won't create duplicates.
-
 ---
 
-## 7. Recommended UI patterns
+## 6. What the frontend needs to show
 
-### 7.1 Bell icon with category-specific badges
+### 6.1 Bell icon with badge (top nav)
+
+Show **only when role !== 'Staff'**.
 
 ```jsx
-function NotificationBell() {
+function NotificationBell({ userRole }) {
+  if (userRole === 'Staff') return null;
+
   const { data } = useSWR('/api/notifications/unread-count', { refreshInterval: 30000 });
   const total = data?.data?.total || 0;
 
@@ -451,231 +423,123 @@ function NotificationBell() {
 }
 ```
 
-### 7.2 Drawer with category tabs
-
-```
-┌────────────────────────────────────────┐
-│ Notifications              [Mark all]  │
-├────────────────────────────────────────┤
-│ [All 8] [Attend 5] [Inv 2] [Rota 1]    │
-├────────────────────────────────────────┤
-│ ⏰ John Smith punched in late          │
-│    45 min after shift • Camden         │
-│    2 minutes ago                       │
-├────────────────────────────────────────┤
-│ 🔧 Coffee Machine reported broken      │
-│    by Sarah • Baker St                 │
-│    1 hour ago                          │
-└────────────────────────────────────────┘
-```
+### 6.2 Drawer / dropdown with role-filtered tabs
 
 ```jsx
-const [activeTab, setActiveTab] = useState('all');
-const { data } = useSWR(
-  `/api/notifications?${activeTab !== 'all' ? `category=${activeTab}&` : ''}page=1&limit=20`
-);
+const tabs = TABS_BY_ROLE[userRole] || [];
+// Render <Tabs> with only those entries
 ```
 
-### 7.3 Toast for critical-only
+Layout sketch:
+
+```
+┌─────────────────────────────────────────┐
+│ Notifications              [Mark all]   │
+├─────────────────────────────────────────┤
+│ [All 8] [Attend 5] [Inv 2] [Rota 1]     │   ← tabs filtered by role
+├─────────────────────────────────────────┤
+│ 🚨 John Smith missed his punch-in       │   ← critical = red badge
+│    30 min after shift • Camden          │
+│    2 minutes ago                        │
+├─────────────────────────────────────────┤
+│ ⏰ Sarah punched in late                 │   ← warning = amber
+│    45 min after shift • Baker St        │
+│    1 hour ago                           │
+├─────────────────────────────────────────┤
+│ 🔧 Coffee Machine reported broken       │
+│    by Mark • Baker St                   │
+│    3 hours ago                          │
+└─────────────────────────────────────────┘
+```
+
+### 6.3 Critical-severity toast
+
+`MISSED_PUNCH_IN` is `critical`. Show a sticky toast so managers notice immediately:
 
 ```jsx
 useEffect(() => {
+  if (userRole === 'Staff') return;
+
   const interval = setInterval(async () => {
     const res = await fetch('/api/notifications?severity=critical&read=false&limit=5');
     const { data } = await res.json();
     data.notifications.forEach((n) => {
       if (!shown.has(n._id)) {
-        toast.error(n.title, { description: n.message });
+        toast.error(n.title, { description: n.message, duration: 30000 });
         shown.add(n._id);
       }
     });
   }, 30000);
   return () => clearInterval(interval);
-}, []);
+}, [userRole]);
 ```
 
-### 7.4 Deep-link on click
-
-Each notification has the relevant `*_id` fields. On click:
+### 6.4 Deep-link on click
 
 ```ts
 function handleClick(n) {
-  // Mark read
   fetch(`/api/notifications/${n._id}/read`, { method: 'PATCH', headers });
 
-  // Deep-link based on category
   if (n.attendance_id) router.push(`/attendance/${n.attendance_id}`);
   else if (n.inventory_query_id) router.push(`/inventory/queries/${n.inventory_query_id}`);
   else if (n.rota_id) router.push(`/rotas/${n.rota_id}`);
+  else if (n.target_user_id) router.push(`/users/${n.target_user_id._id || n.target_user_id}`);
   else if (n.shop_id) router.push(`/shops/${n.shop_id._id || n.shop_id}`);
 }
 ```
 
-### 7.5 Format relative time
+### 6.5 Relative time
 
 ```ts
 import { formatDistanceToNow } from 'date-fns';
-formatDistanceToNow(new Date(notification.createdAt), { addSuffix: true });
+formatDistanceToNow(new Date(n.createdAt), { addSuffix: true });
 // → "2 minutes ago"
 ```
 
----
+### 6.6 Section-wise inbox page
 
-## 8. Postman collection JSON
+For an inbox page (full-page view), show one section per category — but only sections the role can see:
 
-Save as `notifications.postman_collection.json` and import.
+```
+┌─────── Attendance Notifications (5) ───────┐
+│ ⏰ Sarah punched in late · 45 min late      │
+│ 🚨 John missed punch-in                     │
+└────────────────────────────────────────────┘
 
-```json
-{
-  "info": {
-    "name": "Subway — Notifications",
-    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
-  },
-  "variable": [
-    { "key": "base_url", "value": "http://localhost:3000" },
-    { "key": "jwt", "value": "PASTE_YOUR_TOKEN_HERE" }
-  ],
-  "auth": {
-    "type": "bearer",
-    "bearer": [{ "key": "token", "value": "{{jwt}}", "type": "string" }]
-  },
-  "item": [
-    {
-      "name": "List — all unread",
-      "request": {
-        "method": "GET",
-        "url": {
-          "raw": "{{base_url}}/api/notifications?read=false&page=1&limit=20",
-          "host": ["{{base_url}}"],
-          "path": ["api", "notifications"],
-          "query": [
-            { "key": "read", "value": "false" },
-            { "key": "page", "value": "1" },
-            { "key": "limit", "value": "20" }
-          ]
-        }
-      }
-    },
-    {
-      "name": "List — attendance only",
-      "request": {
-        "method": "GET",
-        "url": {
-          "raw": "{{base_url}}/api/notifications?category=attendance&page=1&limit=20",
-          "host": ["{{base_url}}"],
-          "path": ["api", "notifications"],
-          "query": [
-            { "key": "category", "value": "attendance" },
-            { "key": "page", "value": "1" },
-            { "key": "limit", "value": "20" }
-          ]
-        }
-      }
-    },
-    {
-      "name": "Unread count (bell badge)",
-      "request": {
-        "method": "GET",
-        "url": {
-          "raw": "{{base_url}}/api/notifications/unread-count",
-          "host": ["{{base_url}}"],
-          "path": ["api", "notifications", "unread-count"]
-        }
-      }
-    },
-    {
-      "name": "Summary (dashboard widget)",
-      "request": {
-        "method": "GET",
-        "url": {
-          "raw": "{{base_url}}/api/notifications/summary",
-          "host": ["{{base_url}}"],
-          "path": ["api", "notifications", "summary"]
-        }
-      }
-    },
-    {
-      "name": "Categories enum",
-      "request": {
-        "method": "GET",
-        "url": {
-          "raw": "{{base_url}}/api/notifications/categories",
-          "host": ["{{base_url}}"],
-          "path": ["api", "notifications", "categories"]
-        }
-      }
-    },
-    {
-      "name": "Mark one read",
-      "request": {
-        "method": "PATCH",
-        "url": {
-          "raw": "{{base_url}}/api/notifications/PASTE_NOTIFICATION_ID/read",
-          "host": ["{{base_url}}"],
-          "path": ["api", "notifications", "PASTE_NOTIFICATION_ID", "read"]
-        }
-      }
-    },
-    {
-      "name": "Mark all read — attendance",
-      "request": {
-        "method": "POST",
-        "header": [{ "key": "Content-Type", "value": "application/json" }],
-        "body": { "mode": "raw", "raw": "{\n  \"category\": \"attendance\"\n}" },
-        "url": {
-          "raw": "{{base_url}}/api/notifications/mark-all-read",
-          "host": ["{{base_url}}"],
-          "path": ["api", "notifications", "mark-all-read"]
-        }
-      }
-    },
-    {
-      "name": "Archive (soft delete)",
-      "request": {
-        "method": "DELETE",
-        "url": {
-          "raw": "{{base_url}}/api/notifications/PASTE_NOTIFICATION_ID",
-          "host": ["{{base_url}}"],
-          "path": ["api", "notifications", "PASTE_NOTIFICATION_ID"]
-        }
-      }
-    },
-    {
-      "name": "Scan missed punches (cron)",
-      "request": {
-        "method": "POST",
-        "url": {
-          "raw": "{{base_url}}/api/notifications/scan?target=all&grace_minutes=30",
-          "host": ["{{base_url}}"],
-          "path": ["api", "notifications", "scan"],
-          "query": [
-            { "key": "target", "value": "all" },
-            { "key": "grace_minutes", "value": "30" }
-          ]
-        }
-      }
-    }
-  ]
-}
+┌─────── Inventory Notifications (2) ────────┐
+│ 🔧 Coffee Machine reported broken           │
+│ ⚠️ Oven marked damaged                       │
+└────────────────────────────────────────────┘
 ```
 
----
-
-## 9. Quick-start integration checklist
-
-- [ ] Add bell icon to header, poll `/unread-count` every 30 s
-- [ ] Build drawer/dropdown that fetches `/api/notifications?read=false`
-- [ ] Add category tabs (Attendance / Inventory / Rota / System)
-- [ ] Show icon based on `event_type` per the mapping table
-- [ ] Apply severity color to border or badge
-- [ ] On click → mark read + deep-link
-- [ ] Add "Mark all read" button → `POST /mark-all-read`
-- [ ] Optional: set up cron to call `/scan?target=all` every 15 min
-- [ ] Optional: critical-severity toast polling
+Drive each section's data from a separate call with `?category=...&limit=10`.
 
 ---
 
-## 10. Error responses
+## 7. Postman collection JSON
+
+Import `docs/notifications.postman_collection.json` into Postman, set the `{{jwt}}` variable once, and run any of the 18 ready-made requests grouped by Setup / Read / Mark / Scan.
+
+---
+
+## 8. Quick-start checklist
+
+- [ ] Read the user's role from the login response → derive `tabs` and `showBell`
+- [ ] If `role !== 'Staff'`, add bell icon to header
+- [ ] Poll `GET /api/notifications/unread-count` every 30 s for the badge
+- [ ] Build drawer with category tabs filtered by role using `TABS_BY_ROLE`
+- [ ] Each tab calls `GET /api/notifications?category=...&read=false&limit=20`
+- [ ] On notification click: `PATCH /:id/read` then deep-link
+- [ ] Add "Mark all read" button → `POST /mark-all-read` (optional `{category}`)
+- [ ] Optional: critical-severity toast loop (`?severity=critical&read=false`)
+- [ ] Use `event_type` to pick icon + color from the suggested map
+- [ ] Use `severity` to set border / badge color (info=gray, warning=amber, critical=red)
+
+> **No cron setup required.** The scan that finds missed punch-ins runs automatically each time an admin loads the bell or logs in (throttled to once every 10 min). You don't need to call `/scan` unless you want a manual "refresh now" button.
+
+---
+
+## 9. Error responses
 
 ```json
 { "status": 400, "message": "category must be one of: attendance, inventory, rota, system", "data": {} }
@@ -687,5 +551,5 @@ Save as `notifications.postman_collection.json` and import.
 | ---- | ----------------------------------------------------- |
 | 400  | Invalid category/severity in query                    |
 | 401  | Missing/invalid JWT                                   |
-| 403  | Lacks permission for `/scan` endpoint                 |
+| 403  | Lacks `can_view_all_staff` for `/scan` endpoint       |
 | 404  | Notification ID not found, or belongs to another user |

@@ -133,7 +133,6 @@ async function emit({
 
 function safeEmit(payload) {
   return emit(payload).catch((err) => {
-     
     console.error('[notificationService] emit failed:', err.message, {
       category: payload.category,
       event_type: payload.event_type,
@@ -376,6 +375,64 @@ async function notifyUserCreated({ user, performer }) {
 //
 // Run periodically (cron) or on-demand via admin endpoint.
 
+// ── Opportunistic scanning (replaces cron) ──────────────────────────────────
+//
+// Because the project has no VPC/cron infrastructure, we run the missed-punch
+// scans opportunistically: on user login and on admin notification reads.
+// A module-level cache throttles scans to once every MIN_SCAN_INTERVAL_MS
+// regardless of how many requests come in, so heavy traffic doesn't hammer
+// the DB.
+
+const MIN_SCAN_INTERVAL_MS = Number(process.env.NOTIFICATION_SCAN_INTERVAL_MS) || 10 * 60 * 1000;
+const lastScanAt = { all: 0, missed_punch_in: 0, missed_punch_out: 0 };
+let inFlight = null;
+
+async function maybeRunScan({ target = 'all', graceMinutes = 30 } = {}) {
+  const now = Date.now();
+  const last = lastScanAt[target] || 0;
+  if (now - last < MIN_SCAN_INTERVAL_MS) {
+    return { skipped: true, reason: 'throttled', last_scan_at: new Date(last).toISOString() };
+  }
+
+  // Coalesce: if a scan is already running, return its promise
+  if (inFlight) return inFlight;
+
+  lastScanAt[target] = now;
+  inFlight = (async () => {
+    const out = {};
+    try {
+      if (target === 'all' || target === 'missed_punch_in') {
+        out.missed_punch_in = await scanForMissedPunchIns({ graceMinutes });
+      }
+      if (target === 'all' || target === 'missed_punch_out') {
+        out.missed_punch_out = await scanForMissedPunchOuts();
+      }
+    } catch (err) {
+      out.error = err.message;
+       
+      console.error('[notificationService] background scan failed:', err.message);
+    }
+    return out;
+  })();
+
+  try {
+    return await inFlight;
+  } finally {
+    inFlight = null;
+  }
+}
+
+// Fire-and-forget wrapper for opportunistic triggers (login, list endpoints).
+// Caller does not await; errors are logged and swallowed.
+function triggerBackgroundScan(opts) {
+  setImmediate(() => {
+    maybeRunScan(opts).catch((err) => {
+       
+      console.error('[notificationService] triggerBackgroundScan failed:', err.message);
+    });
+  });
+}
+
 async function scanForMissedPunchIns({ graceMinutes = 30 } = {}) {
   const now = new Date();
   const cutoff = new Date(now.getTime() - graceMinutes * 60_000);
@@ -470,7 +527,10 @@ module.exports = {
   // scans
   scanForMissedPunchIns,
   scanForMissedPunchOuts,
+  maybeRunScan,
+  triggerBackgroundScan,
   // constants
   LATE_PUNCH_THRESHOLD_MINUTES,
+  MIN_SCAN_INTERVAL_MS,
   PERMISSIONS_BY_CATEGORY,
 };
