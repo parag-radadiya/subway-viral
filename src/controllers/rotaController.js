@@ -341,6 +341,8 @@ const createRota = asyncHandler(async (req, res) => {
   const scope = buildRotaManageScope(req.user);
   assertManageShopAllowed(scope, req.body.shop_id);
   const payload = normalizeRotaPayload(req.body);
+
+  console.log('Creating rota with payload:', payload);
   const caps = await fetchShopShiftDurationCaps(payload.shop_id);
   assertShiftDurationWithinShopCaps({
     shiftStart: payload.shift_start,
@@ -442,6 +444,38 @@ const bulkCreate = asyncHandler(async (req, res) => {
   const dates = buildDates(week_start, days);
   const { start: weekStart, end: weekEnd } = weekBounds(week_start);
   const userIds = [...new Set(normalizedAssignments.map((a) => a.user_id))];
+  const dateTimes = new Set(dates.map((d) => d.getTime()));
+
+  // Reject assignments whose specific date (extracted from an ISO datetime
+  // start_time) falls outside the resolved week. Without this, the for-loop
+  // below silently skips them and returns "0 created, 0 skipped" — confusing
+  // for the caller. Fail fast with a clear, actionable message.
+  const outOfRangeAssignments = normalizedAssignments
+    .map((assignment, idx) => ({ assignment, idx }))
+    .filter(
+      ({ assignment }) =>
+        assignment.specificDate && !dateTimes.has(assignment.specificDate.getTime())
+    );
+
+  if (outOfRangeAssignments.length > 0) {
+    const fmt = (d) => d.toISOString().slice(0, 10);
+    throw new AppError(
+      `Assignment date falls outside the requested week (week range: ${fmt(dates[0])} to ${fmt(dates[dates.length - 1])}). ` +
+        `Either move week_start to the correct week, or send start_time/end_time as plain HH:MM strings to apply to every day in days[].`,
+      400,
+      {
+        error_code: 'ASSIGNMENT_DATE_OUTSIDE_WEEK',
+        week_start: fmt(dates[0]),
+        week_end: fmt(dates[dates.length - 1]),
+        resolved_dates: dates.map(fmt),
+        out_of_range: outOfRangeAssignments.map(({ assignment, idx }) => ({
+          index: idx,
+          user_id: assignment.user_id,
+          provided_date: fmt(assignment.specificDate),
+        })),
+      }
+    );
+  }
 
   if (replace_existing) {
     await Rota.deleteMany({
