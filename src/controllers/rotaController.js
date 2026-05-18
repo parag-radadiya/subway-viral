@@ -424,7 +424,16 @@ const deleteRota = asyncHandler(async (req, res) => {
 });
 
 const bulkCreate = asyncHandler(async (req, res) => {
-  const { shop_id, week_start, days, assignments, replace_existing = false } = req.body;
+  let { shop_id, week_start, days, assignments, replace_existing = false } = req.body;
+
+  // "week_start": "2026-05-25",
+  const fix_week_start = new Date(
+    new Date(week_start + 'T00:00:00').setDate(new Date(week_start + 'T00:00:00').getDate() + 1)
+  )
+    .toISOString()
+    .split('T')[0];
+
+  week_start = fix_week_start;
 
   if (!shop_id || !week_start || !Array.isArray(days) || !Array.isArray(assignments)) {
     throw new AppError('shop_id, week_start, days[], and assignments[] are all required', 400);
