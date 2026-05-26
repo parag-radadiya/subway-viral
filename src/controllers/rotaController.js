@@ -7,8 +7,10 @@ const { buildShopScope, isShopAllowed } = require('../middleware/shopScopeMiddle
 const { parsePagination, toPageMeta } = require('../utils/pagination');
 const notificationService = require('../services/notificationService');
 
-const DEFAULT_MIN_SHIFT_DURATION_HOURS = 2;
-const DEFAULT_MAX_SHIFT_DURATION_HOURS = 8;
+// Shift duration caps (min/max hours per shift) and the
+// "shift_start must be in the future" guard were removed intentionally —
+// managers create rotas mid-week and need to be able to backfill past days
+// in the current week, and shifts can be any length.
 
 function buildDates(weekStart, days) {
   const base = new Date(weekStart);
@@ -119,9 +121,8 @@ function normalizeRotaPayload(payload) {
   if (shiftEnd <= shiftStart) {
     throw new AppError('shift_end must be after shift_start', 400);
   }
-  if (process.env.NODE_ENV !== 'test' && shiftStart < new Date()) {
-    throw new AppError('shift_start must be in the future', 400);
-  }
+  // Past shifts are intentionally allowed — a rota for the current week may
+  // be created mid-week, after some days have already passed.
 
   const shiftDate = new Date(shiftStart);
   shiftDate.setUTCHours(0, 0, 0, 0);
@@ -132,41 +133,6 @@ function normalizeRotaPayload(payload) {
     shift_end: shiftEnd,
     shift_date: shiftDate,
   };
-}
-
-function computeShiftDurationHours(shiftStart, shiftEnd) {
-  const ms = new Date(shiftEnd).getTime() - new Date(shiftStart).getTime();
-  return Number((ms / (1000 * 60 * 60)).toFixed(2));
-}
-
-async function fetchShopShiftDurationCaps(shopId) {
-  const shop = await Shop.findById(shopId).select(
-    'min_shift_duration_hours max_shift_duration_hours'
-  );
-  if (!shop) throw new AppError('Shop not found', 404);
-
-  const rawMin = Number(shop.min_shift_duration_hours);
-  const rawMax = Number(shop.max_shift_duration_hours);
-  const minHours =
-    Number.isFinite(rawMin) && rawMin > 0 ? rawMin : DEFAULT_MIN_SHIFT_DURATION_HOURS;
-  const maxHours =
-    Number.isFinite(rawMax) && rawMax > 0 ? rawMax : DEFAULT_MAX_SHIFT_DURATION_HOURS;
-
-  return {
-    minHours,
-    maxHours: maxHours >= minHours ? maxHours : minHours,
-  };
-}
-
-function assertShiftDurationWithinShopCaps({ shiftStart, shiftEnd, caps, userId }) {
-  const durationHours = computeShiftDurationHours(shiftStart, shiftEnd);
-  if (durationHours < caps.minHours || durationHours > caps.maxHours) {
-    const userSuffix = userId ? ` for user ${userId}` : '';
-    throw new AppError(
-      `Shift duration${userSuffix} must be between ${caps.minHours}h and ${caps.maxHours}h`,
-      400
-    );
-  }
 }
 
 function isOverlappingWindow(aStart, aEnd, bStart, bEnd) {
@@ -342,14 +308,8 @@ const createRota = asyncHandler(async (req, res) => {
   assertManageShopAllowed(scope, req.body.shop_id);
   const payload = normalizeRotaPayload(req.body);
 
-  console.log('Creating rota with payload:', payload);
-  const caps = await fetchShopShiftDurationCaps(payload.shop_id);
-  assertShiftDurationWithinShopCaps({
-    shiftStart: payload.shift_start,
-    shiftEnd: payload.shift_end,
-    caps,
-    userId: payload.user_id,
-  });
+  // Shift duration caps (min/max hours) are no longer enforced — managers
+  // can create rotas of any duration. Overlap detection still applies below.
 
   await assertNoOverlapOrThrow({
     userId: payload.user_id,
@@ -379,13 +339,8 @@ const updateRota = asyncHandler(async (req, res) => {
   assertManageShopAllowed(scope, existing.shop_id);
   if (req.body.shop_id) assertManageShopAllowed(scope, req.body.shop_id);
   const mergedPayload = normalizeRotaPayload({ ...existing.toObject(), ...req.body });
-  const caps = await fetchShopShiftDurationCaps(mergedPayload.shop_id);
-  assertShiftDurationWithinShopCaps({
-    shiftStart: mergedPayload.shift_start,
-    shiftEnd: mergedPayload.shift_end,
-    caps,
-    userId: mergedPayload.user_id,
-  });
+
+  // Shift duration caps removed — see createRota note.
 
   await assertNoOverlapOrThrow({
     userId: mergedPayload.user_id,
@@ -448,7 +403,6 @@ const bulkCreate = asyncHandler(async (req, res) => {
 
   const scope = buildRotaManageScope(req.user);
   assertManageShopAllowed(scope, shop_id);
-  const caps = await fetchShopShiftDurationCaps(shop_id);
 
   const dates = buildDates(week_start, days);
   const { start: weekStart, end: weekEnd } = weekBounds(week_start);
@@ -523,19 +477,9 @@ const bulkCreate = asyncHandler(async (req, res) => {
           400
         );
       }
-      if (process.env.NODE_ENV !== 'test' && shiftStart < new Date()) {
-        throw new AppError(
-          `Cannot create past rota for user ${assignment.user_id}. shift_start must be in the future.`,
-          400
-        );
-      }
-
-      assertShiftDurationWithinShopCaps({
-        shiftStart,
-        shiftEnd,
-        caps,
-        userId: assignment.user_id,
-      });
+      // Past shifts are intentionally allowed — a rota for the current week
+      // may be published mid-week, after some days have already passed.
+      // Shift duration caps (min/max hours) are no longer enforced.
 
       toInsert.push({
         user_id: assignment.user_id,

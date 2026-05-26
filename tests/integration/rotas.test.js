@@ -518,10 +518,12 @@ describe('Rota module integration', () => {
     expect(res.body.data.conflicts[0].reason).toContain('Overlapping shift');
   });
 
-  it('ROTA-024: rejects rota outside shop min/max shift caps', async () => {
+  it('ROTA-024: accepts rotas of any duration (shift caps no longer enforced)', async () => {
     const adminLogin = await login('admin@org.com', 'Admin@1234');
     const managerLogin = await login('manager@org.com', 'Manager@1234');
 
+    // Shop caps may still be configured for record-keeping, but the rota
+    // endpoints intentionally do NOT enforce them anymore.
     const capsRes = await request(app)
       .put(`/api/shops/${fixtures.shops.mainShop._id}`)
       .set('Authorization', `Bearer ${adminLogin.token}`)
@@ -531,7 +533,8 @@ describe('Rota module integration', () => {
       });
     expectEnvelope(capsRes, 200);
 
-    const tooLongRes = await request(app)
+    // 9-hour shift — would have failed the 8h max cap previously
+    const longRes = await request(app)
       .post('/api/rotas')
       .set('Authorization', `Bearer ${managerLogin.token}`)
       .send({
@@ -540,9 +543,10 @@ describe('Rota module integration', () => {
         shift_start: '2026-04-07T08:00:00.000Z',
         shift_end: '2026-04-07T17:00:00.000Z',
       });
-    expectEnvelope(tooLongRes, 400);
+    expectEnvelope(longRes, 201);
 
-    const tooShortRes = await request(app)
+    // 1-hour shift — would have failed the 2h min cap previously
+    const shortRes = await request(app)
       .post('/api/rotas')
       .set('Authorization', `Bearer ${managerLogin.token}`)
       .send({
@@ -551,7 +555,25 @@ describe('Rota module integration', () => {
         shift_start: '2026-04-08T08:00:00.000Z',
         shift_end: '2026-04-08T09:00:00.000Z',
       });
-    expectEnvelope(tooShortRes, 400);
+    expectEnvelope(shortRes, 201);
+  });
+
+  it('ROTA-024b: accepts rotas with past shift_start (mid-week backfill)', async () => {
+    const managerLogin = await login('manager@org.com', 'Manager@1234');
+
+    // Date in the past — should still succeed because the future-date guard
+    // was removed. (NODE_ENV=test already bypassed the guard, so this also
+    // documents that the runtime behaviour is now consistent.)
+    const res = await request(app)
+      .post('/api/rotas')
+      .set('Authorization', `Bearer ${managerLogin.token}`)
+      .send({
+        user_id: fixtures.users.staffUser._id.toString(),
+        shop_id: fixtures.shops.mainShop._id.toString(),
+        shift_start: '2020-01-01T09:00:00.000Z',
+        shift_end: '2020-01-01T15:00:00.000Z',
+      });
+    expectEnvelope(res, 201);
   });
 
   it('ROTA-025: bulk create supports overnight shifts', async () => {
