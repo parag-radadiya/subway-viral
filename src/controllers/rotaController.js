@@ -344,12 +344,12 @@ const createRota = asyncHandler(async (req, res) => {
 
   console.log('Creating rota with payload:', payload);
   const caps = await fetchShopShiftDurationCaps(payload.shop_id);
-  assertShiftDurationWithinShopCaps({
-    shiftStart: payload.shift_start,
-    shiftEnd: payload.shift_end,
-    caps,
-    userId: payload.user_id,
-  });
+  // assertShiftDurationWithinShopCaps({
+  //   shiftStart: payload.shift_start,
+  //   shiftEnd: payload.shift_end,
+  //   caps,
+  //   userId: payload.user_id,
+  // });
 
   await assertNoOverlapOrThrow({
     userId: payload.user_id,
