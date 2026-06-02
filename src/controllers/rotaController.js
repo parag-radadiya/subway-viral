@@ -379,16 +379,7 @@ const deleteRota = asyncHandler(async (req, res) => {
 });
 
 const bulkCreate = asyncHandler(async (req, res) => {
-  let { shop_id, week_start, days, assignments, replace_existing = false } = req.body;
-
-  // "week_start": "2026-05-25",
-  const fix_week_start = new Date(
-    new Date(week_start + 'T00:00:00').setDate(new Date(week_start + 'T00:00:00').getDate() + 1)
-  )
-    .toISOString()
-    .split('T')[0];
-
-  week_start = fix_week_start;
+  const { shop_id, week_start, days, assignments, replace_existing = false } = req.body;
 
   if (!shop_id || !week_start || !Array.isArray(days) || !Array.isArray(assignments)) {
     throw new AppError('shop_id, week_start, days[], and assignments[] are all required', 400);
@@ -404,15 +395,44 @@ const bulkCreate = asyncHandler(async (req, res) => {
   const scope = buildRotaManageScope(req.user);
   assertManageShopAllowed(scope, shop_id);
 
-  const dates = buildDates(week_start, days);
+  const allDates = buildDates(week_start, days);
   const { start: weekStart, end: weekEnd } = weekBounds(week_start);
+
+  const todayUTC = new Date();
+  todayUTC.setUTCHours(0, 0, 0, 0);
+  const dates = allDates.filter((d) => d >= todayUTC);
+
+  if (dates.length === 0) {
+    throw new AppError(
+      'All selected days are in the past. Only today and future dates are allowed for bulk rota creation.',
+      400
+    );
+  }
+
   const userIds = [...new Set(normalizedAssignments.map((a) => a.user_id))];
   const dateTimes = new Set(dates.map((d) => d.getTime()));
+  const fmt = (d) => d.toISOString().slice(0, 10);
 
-  // Reject assignments whose specific date (extracted from an ISO datetime
-  // start_time) falls outside the resolved week. Without this, the for-loop
-  // below silently skips them and returns "0 created, 0 skipped" — confusing
-  // for the caller. Fail fast with a clear, actionable message.
+  const pastAssignments = normalizedAssignments
+    .map((assignment, idx) => ({ assignment, idx }))
+    .filter(({ assignment }) => assignment.specificDate && assignment.specificDate < todayUTC);
+
+  if (pastAssignments.length > 0) {
+    throw new AppError(
+      'Cannot create rotas for past dates. Only today and future dates are allowed.',
+      400,
+      {
+        error_code: 'ASSIGNMENT_DATE_IN_PAST',
+        today: fmt(todayUTC),
+        past_assignments: pastAssignments.map(({ assignment, idx }) => ({
+          index: idx,
+          user_id: assignment.user_id,
+          provided_date: fmt(assignment.specificDate),
+        })),
+      }
+    );
+  }
+
   const outOfRangeAssignments = normalizedAssignments
     .map((assignment, idx) => ({ assignment, idx }))
     .filter(
@@ -421,16 +441,15 @@ const bulkCreate = asyncHandler(async (req, res) => {
     );
 
   if (outOfRangeAssignments.length > 0) {
-    const fmt = (d) => d.toISOString().slice(0, 10);
     throw new AppError(
-      `Assignment date falls outside the requested week (week range: ${fmt(dates[0])} to ${fmt(dates[dates.length - 1])}). ` +
+      `Assignment date falls outside the requested week (week range: ${fmt(allDates[0])} to ${fmt(allDates[allDates.length - 1])}). ` +
         `Either move week_start to the correct week, or send start_time/end_time as plain HH:MM strings to apply to every day in days[].`,
       400,
       {
         error_code: 'ASSIGNMENT_DATE_OUTSIDE_WEEK',
-        week_start: fmt(dates[0]),
-        week_end: fmt(dates[dates.length - 1]),
-        resolved_dates: dates.map(fmt),
+        week_start: fmt(allDates[0]),
+        week_end: fmt(allDates[allDates.length - 1]),
+        resolved_dates: allDates.map(fmt),
         out_of_range: outOfRangeAssignments.map(({ assignment, idx }) => ({
           index: idx,
           user_id: assignment.user_id,
@@ -444,7 +463,7 @@ const bulkCreate = asyncHandler(async (req, res) => {
     await Rota.deleteMany({
       shop_id,
       user_id: { $in: userIds },
-      shift_date: { $gte: weekStart, $lte: weekEnd },
+      shift_date: { $gte: todayUTC, $lte: weekEnd },
     });
   }
 
@@ -477,10 +496,6 @@ const bulkCreate = asyncHandler(async (req, res) => {
           400
         );
       }
-      // Past shifts are intentionally allowed — a rota for the current week
-      // may be published mid-week, after some days have already passed.
-      // Shift duration caps (min/max hours) are no longer enforced.
-
       toInsert.push({
         user_id: assignment.user_id,
         shop_id,
