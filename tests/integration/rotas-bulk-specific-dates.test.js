@@ -5,8 +5,29 @@ const { login } = require('../helpers/auth');
 const { seedTestData } = require('../helpers/seedTestData');
 const { connectSandboxDb, clearSandboxDb, disconnectSandboxDb } = require('../setup/testDb');
 
+function nextMonday() {
+  const d = new Date();
+  d.setUTCHours(0, 0, 0, 0);
+  const dow = d.getUTCDay();
+  const daysUntilMon = dow === 0 ? 1 : dow === 1 ? 7 : 8 - dow;
+  d.setUTCDate(d.getUTCDate() + daysUntilMon);
+  return d;
+}
+
+function fmtDate(d) {
+  return d.toISOString().slice(0, 10);
+}
+
+function addDays(d, n) {
+  const r = new Date(d);
+  r.setUTCDate(r.getUTCDate() + n);
+  return r;
+}
+
 describe('Rota bulk create with specific dates', () => {
   let fixtures;
+  let futureMonday;
+  let futureMondayStr;
 
   beforeAll(async () => {
     await connectSandboxDb();
@@ -15,6 +36,8 @@ describe('Rota bulk create with specific dates', () => {
   beforeEach(async () => {
     await clearSandboxDb();
     fixtures = await seedTestData();
+    futureMonday = nextMonday();
+    futureMondayStr = fmtDate(futureMonday);
   });
 
   afterAll(async () => {
@@ -23,34 +46,34 @@ describe('Rota bulk create with specific dates', () => {
 
   it('should apply assignments with specific ISO dates only to matching days', async () => {
     const managerLogin = await login('manager@org.com', 'Manager@1234');
+    const mon = futureMonday;
+    const tue = addDays(mon, 1);
 
     const res = await request(app)
       .post('/api/rotas/bulk')
       .set('Authorization', `Bearer ${managerLogin.token}`)
       .send({
         shop_id: fixtures.shops.mainShop._id.toString(),
-        week_start: '2026-03-23',
-        days: [0, 1, 2, 3, 4, 5, 6], // All 7 days
+        week_start: futureMondayStr,
+        days: [0, 1, 2, 3, 4, 5, 6],
         replace_existing: false,
         assignments: [
           {
             user_id: fixtures.users.staffUser._id.toString(),
-            start_time: '2026-03-23T09:00:00.000Z',
-            end_time: '2026-03-23T17:00:00.000Z',
+            start_time: `${fmtDate(mon)}T09:00:00.000Z`,
+            end_time: `${fmtDate(mon)}T17:00:00.000Z`,
             note: 'Monday only',
           },
           {
             user_id: fixtures.users.staffUser._id.toString(),
-            start_time: '2026-03-24T09:00:00.000Z',
-            end_time: '2026-03-24T17:00:00.000Z',
+            start_time: `${fmtDate(tue)}T09:00:00.000Z`,
+            end_time: `${fmtDate(tue)}T17:00:00.000Z`,
             note: 'Tuesday only',
           },
         ],
       });
 
     expectEnvelope(res, 201);
-    // Should create exactly 2 rotas (one for Monday, one for Tuesday)
-    // Not 14 (7 days × 2 assignments)
     expect(res.body.data.created).toBe(2);
     expect(res.body.data.skipped).toBe(0);
     expect(res.body.data.conflicts.length).toBe(0);
@@ -64,8 +87,8 @@ describe('Rota bulk create with specific dates', () => {
       .set('Authorization', `Bearer ${managerLogin.token}`)
       .send({
         shop_id: fixtures.shops.mainShop._id.toString(),
-        week_start: '2026-03-23',
-        days: [0, 1, 2], // Mon, Tue, Wed
+        week_start: futureMondayStr,
+        days: [0, 1, 2],
         replace_existing: false,
         assignments: [
           {
@@ -78,31 +101,31 @@ describe('Rota bulk create with specific dates', () => {
       });
 
     expectEnvelope(res, 201);
-    // Should create 3 rotas (one for each selected day)
     expect(res.body.data.created).toBe(3);
     expect(res.body.data.skipped).toBe(0);
   });
 
   it('should mix specific dates and time patterns', async () => {
     const managerLogin = await login('manager@org.com', 'Manager@1234');
+    const mon = futureMonday;
 
     const res = await request(app)
       .post('/api/rotas/bulk')
       .set('Authorization', `Bearer ${managerLogin.token}`)
       .send({
         shop_id: fixtures.shops.mainShop._id.toString(),
-        week_start: '2026-03-23',
+        week_start: futureMondayStr,
         days: [0, 1, 2, 3, 4, 5, 6],
         replace_existing: false,
         assignments: [
           {
             user_id: fixtures.users.staffUser._id.toString(),
-            start_time: '2026-03-23T09:00:00.000Z', // Monday only
-            end_time: '2026-03-23T17:00:00.000Z',
+            start_time: `${fmtDate(mon)}T09:00:00.000Z`,
+            end_time: `${fmtDate(mon)}T17:00:00.000Z`,
           },
           {
             user_id: fixtures.users.managerUser._id.toString(),
-            start_time: '14:00', // All 7 days
+            start_time: '14:00',
             end_time: '22:00',
           },
         ],
@@ -117,29 +140,31 @@ describe('Rota bulk create with specific dates', () => {
   it('should return 400 when specific date falls outside the week (no silent failure)', async () => {
     const managerLogin = await login('manager@org.com', 'Manager@1234');
 
-    // week_start: Sunday May 17 → resolves to week Mon May 11 – Sun May 17
-    // start_time:  Saturday May 23 → outside that week
+    // week_start resolves to futureMonday's week (Mon–Sun)
+    // start_time uses a date 10 days later → outside that week
+    const outOfRangeDate = addDays(futureMonday, 10);
+
     const res = await request(app)
       .post('/api/rotas/bulk')
       .set('Authorization', `Bearer ${managerLogin.token}`)
       .send({
         shop_id: fixtures.shops.mainShop._id.toString(),
-        week_start: '2026-05-17',
+        week_start: futureMondayStr,
         days: [0, 1, 2, 3, 4, 5, 6],
         replace_existing: false,
         assignments: [
           {
             user_id: fixtures.users.staffUser._id.toString(),
-            start_time: '2026-05-23T21:00:00.000Z',
-            end_time: '2026-05-24T03:00:00.000Z',
+            start_time: `${fmtDate(outOfRangeDate)}T21:00:00.000Z`,
+            end_time: `${fmtDate(addDays(outOfRangeDate, 1))}T03:00:00.000Z`,
           },
         ],
       });
 
     expect(res.status).toBe(400);
     expect(res.body.data.error_code).toBe('ASSIGNMENT_DATE_OUTSIDE_WEEK');
-    expect(res.body.data.week_start).toBe('2026-05-11');
-    expect(res.body.data.week_end).toBe('2026-05-17');
-    expect(res.body.data.out_of_range[0].provided_date).toBe('2026-05-23');
+    expect(res.body.data.week_start).toBe(futureMondayStr);
+    expect(res.body.data.week_end).toBe(fmtDate(addDays(futureMonday, 6)));
+    expect(res.body.data.out_of_range[0].provided_date).toBe(fmtDate(outOfRangeDate));
   });
 });

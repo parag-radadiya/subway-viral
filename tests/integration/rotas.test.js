@@ -8,8 +8,29 @@ const Shop = require('../../src/models/Shop');
 const User = require('../../src/models/User');
 const { connectSandboxDb, clearSandboxDb, disconnectSandboxDb } = require('../setup/testDb');
 
+function nextMonday() {
+  const d = new Date();
+  d.setUTCHours(0, 0, 0, 0);
+  const dow = d.getUTCDay();
+  const daysUntilMon = dow === 0 ? 1 : dow === 1 ? 7 : 8 - dow;
+  d.setUTCDate(d.getUTCDate() + daysUntilMon);
+  return d;
+}
+
+function fmtDate(d) {
+  return d.toISOString().slice(0, 10);
+}
+
+function addDays(d, n) {
+  const r = new Date(d);
+  r.setUTCDate(r.getUTCDate() + n);
+  return r;
+}
+
 describe('Rota module integration', () => {
   let fixtures;
+  let futureMonday;
+  let futureMondayStr;
 
   beforeAll(async () => {
     await connectSandboxDb();
@@ -18,6 +39,8 @@ describe('Rota module integration', () => {
   beforeEach(async () => {
     await clearSandboxDb();
     fixtures = await seedTestData();
+    futureMonday = nextMonday();
+    futureMondayStr = fmtDate(futureMonday);
   });
 
   afterAll(async () => {
@@ -32,7 +55,7 @@ describe('Rota module integration', () => {
       .set('Authorization', `Bearer ${managerLogin.token}`)
       .send({
         shop_id: fixtures.shops.mainShop._id.toString(),
-        week_start: '2026-03-16',
+        week_start: futureMondayStr,
         days: [0, 1],
         assignments: [
           {
@@ -188,7 +211,7 @@ describe('Rota module integration', () => {
       .set('Authorization', `Bearer ${managerLogin.token}`)
       .send({
         shop_id: fixtures.shops.mainShop._id.toString(),
-        week_start: '2026-03-24',
+        week_start: futureMondayStr,
         days: [0],
         assignments: [
           {
@@ -205,7 +228,7 @@ describe('Rota module integration', () => {
       .set('Authorization', `Bearer ${managerLogin.token}`)
       .send({
         shop_id: fixtures.shops.mainShop._id.toString(),
-        week_start: '2026-03-24',
+        week_start: futureMondayStr,
         days: [0],
         assignments: [
           {
@@ -496,7 +519,7 @@ describe('Rota module integration', () => {
       .set('Authorization', `Bearer ${managerLogin.token}`)
       .send({
         shop_id: fixtures.shops.mainShop._id.toString(),
-        week_start: '2026-04-06',
+        week_start: futureMondayStr,
         days: [0],
         assignments: [
           {
@@ -584,7 +607,7 @@ describe('Rota module integration', () => {
       .set('Authorization', `Bearer ${managerLogin.token}`)
       .send({
         shop_id: fixtures.shops.mainShop._id.toString(),
-        week_start: '2026-04-13',
+        week_start: futureMondayStr,
         days: [0],
         assignments: [
           {
