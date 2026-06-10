@@ -3106,6 +3106,47 @@ function buildDateRangeFilter(fromDate, toDate) {
   return filter;
 }
 
+// Build a (year, month) range filter for the canonical Monthly table.
+// Inclusive on both ends. If only one bound is given, treat it as both.
+function buildMonthRangeFilter(fromDate, toDate) {
+  if (!fromDate && !toDate) return {};
+  const fd = fromDate || toDate;
+  const td = toDate || fromDate;
+  const fromKey = fd.getUTCFullYear() * 12 + fd.getUTCMonth();
+  const toKey = td.getUTCFullYear() * 12 + td.getUTCMonth();
+  return {
+    $expr: {
+      $and: [
+        { $gte: [{ $add: [{ $multiply: ['$year', 12] }, { $subtract: ['$month', 1] }] }, fromKey] },
+        { $lte: [{ $add: [{ $multiply: ['$year', 12] }, { $subtract: ['$month', 1] }] }, toKey] },
+      ],
+    },
+  };
+}
+
+// Canonical fetcher: reads from StoreReportWeekly2026B or StoreReportMonthlySale2026
+// based on report_type. Used by all v2 analytics endpoints (kpi-matrix, shop-compare,
+// period-compare, trend). The `view` param from the StoreReportEntry-era flow is
+// intentionally ignored — these canonical tables have no admin/excel split.
+async function fetchCanonicalRecordsForPeriod({ fromDate, toDate, shopIds, reportType }) {
+  const isMonthly = reportType === 'monthly_store_kpi';
+  const Model = isMonthly ? StoreReportMonthlySale2026 : StoreReportWeekly2026B;
+
+  const filter = isMonthly
+    ? buildMonthRangeFilter(fromDate, toDate)
+    : fromDate || toDate
+      ? buildDateRangeFilter(fromDate, toDate)
+      : {};
+
+  if (shopIds && shopIds.length > 0) {
+    filter.shop_id = {
+      $in: shopIds.map((id) => new (require('mongoose').Types.ObjectId)(id)),
+    };
+  }
+
+  return Model.find(filter).populate('shop_id', 'name');
+}
+
 async function fetchRecordsForPeriod({ fromDate, toDate, shopIds, reportType, view }) {
   const filter = {
     report_type: reportType || 'weekly_financial',
@@ -3186,27 +3227,31 @@ function buildPeriodLabel(rec, granularity) {
 
 // ── v2 handlers ──────────────────────────────────────────────────────────────
 
+// Pull just the record _ids out of an array so admins can drill back to the
+// underlying canonical row that contributed to a given aggregate.
+function referenceIdsFromRecords(records) {
+  return records.map((r) => String(r._id));
+}
+
 // GET /api/store-reports/analytics/v2/kpi-matrix
 // Full financial KPI breakdown for selected period — total + per shop + optional compare period
 const getAnalyticsV2KpiMatrix = asyncHandler(async (req, res) => {
-  const { from_date, to_date, compare_from, compare_to, report_type, view } = req.query;
+  const { from_date, to_date, compare_from, compare_to, report_type } = req.query;
   const shopIds = parseShopIds(req.query);
 
   const [current, compare] = await Promise.all([
-    fetchRecordsForPeriod({
+    fetchCanonicalRecordsForPeriod({
       fromDate: from_date ? new Date(from_date) : null,
       toDate: to_date ? new Date(to_date) : null,
       shopIds,
       reportType: report_type,
-      view,
     }),
     compare_from || compare_to
-      ? fetchRecordsForPeriod({
+      ? fetchCanonicalRecordsForPeriod({
           fromDate: compare_from ? new Date(compare_from) : null,
           toDate: compare_to ? new Date(compare_to) : null,
           shopIds,
           reportType: report_type,
-          view,
         })
       : Promise.resolve([]),
   ]);
@@ -3219,9 +3264,8 @@ const getAnalyticsV2KpiMatrix = asyncHandler(async (req, res) => {
 
   const shops = currentByShop.map((shop) => {
     const cur = sumFullMetrics(shop.records);
-    const cmp = compareByShopMap.has(shop.shopId)
-      ? sumFullMetrics(compareByShopMap.get(shop.shopId).records)
-      : null;
+    const cmpShop = compareByShopMap.get(shop.shopId) || null;
+    const cmp = cmpShop ? sumFullMetrics(cmpShop.records) : null;
     return {
       shopId: shop.shopId,
       shopName: shop.shopName,
@@ -3229,6 +3273,10 @@ const getAnalyticsV2KpiMatrix = asyncHandler(async (req, res) => {
       compare: cmp,
       delta: cmp ? deltaMetrics(cur, cmp) : null,
       record_count: shop.records.length,
+      reference_ids: {
+        current: referenceIdsFromRecords(shop.records),
+        compare: cmpShop ? referenceIdsFromRecords(cmpShop.records) : [],
+      },
     };
   });
 
@@ -3238,11 +3286,16 @@ const getAnalyticsV2KpiMatrix = asyncHandler(async (req, res) => {
     period: { from: from_date || null, to: to_date || null },
     compare_period:
       compare_from || compare_to ? { from: compare_from || null, to: compare_to || null } : null,
+    report_type: report_type === 'monthly_store_kpi' ? 'monthly_store_kpi' : 'weekly_financial',
     total: {
       current: currentTotal,
       compare: compareTotal,
       delta: compareTotal ? deltaMetrics(currentTotal, compareTotal) : null,
       record_count: current.length,
+      reference_ids: {
+        current: referenceIdsFromRecords(current),
+        compare: referenceIdsFromRecords(compare),
+      },
     },
     shops,
     metric_keys: [...FULL_METRIC_KEYS, 'instore'],
@@ -3252,7 +3305,7 @@ const getAnalyticsV2KpiMatrix = asyncHandler(async (req, res) => {
 // GET /api/store-reports/analytics/v2/shop-compare
 // Side-by-side comparison of selected shops for the same date range
 const getAnalyticsV2ShopCompare = asyncHandler(async (req, res) => {
-  const { from_date, to_date, report_type, view } = req.query;
+  const { from_date, to_date, report_type } = req.query;
   const shopIds = parseShopIds(req.query);
   const metrics = parseMetricKeys(req.query);
 
@@ -3260,12 +3313,11 @@ const getAnalyticsV2ShopCompare = asyncHandler(async (req, res) => {
     throw new AppError('shop_ids is required (comma-separated list of shop IDs)', 400);
   }
 
-  const records = await fetchRecordsForPeriod({
+  const records = await fetchCanonicalRecordsForPeriod({
     fromDate: from_date ? new Date(from_date) : null,
     toDate: to_date ? new Date(to_date) : null,
     shopIds,
     reportType: report_type,
-    view,
   });
 
   const byShop = groupRecordsByShop(records);
@@ -3276,6 +3328,7 @@ const getAnalyticsV2ShopCompare = asyncHandler(async (req, res) => {
     shopName: shop.shopName,
     kpis: sumFullMetrics(shop.records),
     record_count: shop.records.length,
+    reference_ids: referenceIdsFromRecords(shop.records),
   }));
 
   // Matrix: metrics × shops
@@ -3297,10 +3350,12 @@ const getAnalyticsV2ShopCompare = asyncHandler(async (req, res) => {
 
   return sendSuccess(res, 'Shop comparison fetched successfully', {
     period: { from: from_date || null, to: to_date || null },
+    report_type: report_type === 'monthly_store_kpi' ? 'monthly_store_kpi' : 'weekly_financial',
     shops: shopSummaries.map((s) => ({
       shopId: s.shopId,
       shopName: s.shopName,
       record_count: s.record_count,
+      reference_ids: s.reference_ids,
     })),
     metrics,
     matrix,
@@ -3311,7 +3366,7 @@ const getAnalyticsV2ShopCompare = asyncHandler(async (req, res) => {
 // GET /api/store-reports/analytics/v2/period-compare
 // Compare ANY two custom date periods, for selected shops
 const getAnalyticsV2PeriodCompare = asyncHandler(async (req, res) => {
-  const { current_from, current_to, compare_from, compare_to, report_type, view } = req.query;
+  const { current_from, current_to, compare_from, compare_to, report_type } = req.query;
 
   if (!current_from || !current_to || !compare_from || !compare_to) {
     throw new AppError('current_from, current_to, compare_from, compare_to are all required', 400);
@@ -3321,19 +3376,17 @@ const getAnalyticsV2PeriodCompare = asyncHandler(async (req, res) => {
   const metrics = parseMetricKeys(req.query);
 
   const [current, compare] = await Promise.all([
-    fetchRecordsForPeriod({
+    fetchCanonicalRecordsForPeriod({
       fromDate: new Date(current_from),
       toDate: new Date(current_to),
       shopIds,
       reportType: report_type,
-      view,
     }),
-    fetchRecordsForPeriod({
+    fetchCanonicalRecordsForPeriod({
       fromDate: new Date(compare_from),
       toDate: new Date(compare_to),
       shopIds,
       reportType: report_type,
-      view,
     }),
   ]);
 
@@ -3362,14 +3415,29 @@ const getAnalyticsV2PeriodCompare = asyncHandler(async (req, res) => {
       current: curKpis,
       compare: cmpKpis,
       delta: curKpis && cmpKpis ? deltaMetrics(curKpis, cmpKpis) : null,
+      reference_ids: {
+        current: curShop ? referenceIdsFromRecords(curShop.records) : [],
+        compare: cmpShop ? referenceIdsFromRecords(cmpShop.records) : [],
+      },
     };
   });
 
   shopData.sort((a, b) => (b.current?.grossSales || 0) - (a.current?.grossSales || 0));
 
   return sendSuccess(res, 'Period comparison fetched successfully', {
-    current_period: { from: current_from, to: current_to, record_count: current.length },
-    compare_period: { from: compare_from, to: compare_to, record_count: compare.length },
+    current_period: {
+      from: current_from,
+      to: current_to,
+      record_count: current.length,
+      reference_ids: referenceIdsFromRecords(current),
+    },
+    compare_period: {
+      from: compare_from,
+      to: compare_to,
+      record_count: compare.length,
+      reference_ids: referenceIdsFromRecords(compare),
+    },
+    report_type: report_type === 'monthly_store_kpi' ? 'monthly_store_kpi' : 'weekly_financial',
     metrics,
     total: {
       current: curTotal,
@@ -3383,18 +3451,28 @@ const getAnalyticsV2PeriodCompare = asyncHandler(async (req, res) => {
 // GET /api/store-reports/analytics/v2/trend
 // Time series for one or more metrics, per shop or combined
 const getAnalyticsV2Trend = asyncHandler(async (req, res) => {
-  const { from_date, to_date, report_type, view } = req.query;
-  const granularity = req.query.granularity === 'month' ? 'month' : 'week';
+  const { from_date, to_date, report_type } = req.query;
+  const normalizedReportType =
+    report_type === 'monthly_store_kpi' ? 'monthly_store_kpi' : 'weekly_financial';
+
+  // The monthly canonical table has no weekly breakdown, so force month granularity for it.
+  // For weekly_financial both granularities are valid; default to week.
+  let granularity;
+  if (normalizedReportType === 'monthly_store_kpi') {
+    granularity = 'month';
+  } else {
+    granularity = req.query.granularity === 'month' ? 'month' : 'week';
+  }
+
   const shopIds = parseShopIds(req.query);
   const metrics = parseMetricKeys(req.query);
   const groupByShop = req.query.group_by === 'shop';
 
-  const records = await fetchRecordsForPeriod({
+  const records = await fetchCanonicalRecordsForPeriod({
     fromDate: from_date ? new Date(from_date) : null,
     toDate: to_date ? new Date(to_date) : null,
     shopIds,
-    reportType: report_type,
-    view,
+    reportType: normalizedReportType,
   });
 
   // Build combined time series
@@ -3423,6 +3501,7 @@ const getAnalyticsV2Trend = asyncHandler(async (req, res) => {
         year: bucket.year,
         month: bucket.month,
         weekNumber: bucket.weekNumber,
+        reference_ids: referenceIdsFromRecords(bucket.records),
       };
       metrics.forEach((m) => {
         point[m] = kpis[m] ?? 0;
@@ -3464,6 +3543,7 @@ const getAnalyticsV2Trend = asyncHandler(async (req, res) => {
             year: bucket.year,
             month: bucket.month,
             weekNumber: bucket.weekNumber,
+            reference_ids: referenceIdsFromRecords(bucket.records),
           };
           metrics.forEach((m) => {
             point[m] = kpis[m] ?? 0;
@@ -3482,6 +3562,7 @@ const getAnalyticsV2Trend = asyncHandler(async (req, res) => {
         shopName: shop.shopName,
         total: Object.fromEntries(metrics.map((m) => [m, overallKpis[m] ?? 0])),
         series,
+        reference_ids: referenceIdsFromRecords(shop.records),
       };
     });
     shopSeries.sort(
@@ -3494,11 +3575,13 @@ const getAnalyticsV2Trend = asyncHandler(async (req, res) => {
   return sendSuccess(res, 'Trend data fetched successfully', {
     period: { from: from_date || null, to: to_date || null },
     granularity,
+    report_type: normalizedReportType,
     metrics,
     group_by: groupByShop ? 'shop' : 'total',
     total: {
       kpis: Object.fromEntries(metrics.map((m) => [m, sumFullMetrics(records)[m] ?? 0])),
       series: totalSeries,
+      reference_ids: referenceIdsFromRecords(records),
     },
     shops: shopSeries,
     data_points: totalSeries.length,
