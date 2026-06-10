@@ -160,7 +160,11 @@ describe('Attendance module integration', () => {
     expectEnvelope(res, 403);
   });
 
-  it('ATT-008: blocks punch-in when x-device-id does not match', async () => {
+  // Device ID verification is temporarily disabled in punchIn (see attendanceController.js).
+  // ATT-008 and ATT-018 previously asserted the check rejected bad / unregistered devices;
+  // they now assert punch-in succeeds regardless of device_id. Restore the original 403
+  // assertions when the device ID verification block is re-enabled.
+  it('ATT-008: allows punch-in even when x-device-id does not match (verification disabled)', async () => {
     const staffLogin = await login('staff@org.com', 'Staff@1234');
 
     const verifyRes = await request(app)
@@ -182,10 +186,10 @@ describe('Attendance module integration', () => {
         biometric_verified: true,
       });
 
-    expectEnvelope(res, 403);
+    expectEnvelope(res, 201);
   });
 
-  it('ATT-018: blocks punch-in when user has not registered device yet', async () => {
+  it('ATT-018: allows punch-in even when user has no registered device (verification disabled)', async () => {
     await User.findByIdAndUpdate(fixtures.users.staffUser._id, { device_id: null });
     const staffLogin = await login('staff@org.com', 'Staff@1234');
 
@@ -208,7 +212,7 @@ describe('Attendance module integration', () => {
         biometric_verified: true,
       });
 
-    expectEnvelope(res, 403);
+    expectEnvelope(res, 201);
   });
 
   it('ATT-012: blocks punch-out for another users attendance record', async () => {

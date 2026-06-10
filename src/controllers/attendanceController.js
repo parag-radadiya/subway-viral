@@ -692,7 +692,9 @@ const verifyLocation = asyncHandler(async (req, res) => {
 // ─────────────────────────────────────────────
 const punchIn = asyncHandler(async (req, res) => {
   const { shop_id, location_token, biometric_verified, rota_id = null } = req.body;
-  const deviceId = req.headers['x-device-id'];
+  // Device ID verification temporarily disabled — frontend is reporting issues with device_id detection.
+  // Re-enable once the client-side device ID flow is stabilised.
+  // const deviceId = req.headers['x-device-id'];
   await runAutoPunchOutSweep();
 
   // 1. Biometric must be confirmed by frontend
@@ -716,13 +718,15 @@ const punchIn = asyncHandler(async (req, res) => {
     throw new AppError('Location token mismatch', 403);
   }
 
-  // 4. Device ID check
-  if (!req.user.device_id) {
-    throw new AppError('No device registered. Please register device after login.', 403);
-  }
-  if (!deviceId || deviceId !== req.user.device_id) {
-    throw new AppError('Device not recognised. Registered device ID mismatch.', 403);
-  }
+  // 4. Device ID check — TEMPORARILY DISABLED
+  // Reason: device_id verification is failing on the client side; disabled until the
+  // frontend device registration / detection flow is fixed. Restore this block to re-enable.
+  // if (!req.user.device_id) {
+  //   throw new AppError('No device registered. Please register device after login.', 403);
+  // }
+  // if (!deviceId || deviceId !== req.user.device_id) {
+  //   throw new AppError('Device not recognised. Registered device ID mismatch.', 403);
+  // }
 
   // 5. Check no open punch-in already exists
   const existing = await Attendance.findOne({
