@@ -1453,7 +1453,8 @@ describe('Store reports integration', () => {
   // ─── Analytics v2 ────────────────────────────────────────────────────────
 
   async function seedV2Records(mainShop, eastShop) {
-    // 4 weeks of 2025 data, 2 shops
+    // 4 weeks of 2025 data, 2 shops — written to the canonical Weekly2026B table
+    // which is what the v2 analytics endpoints now read from.
     const baseMetrics = (sales, labour, food, je, ub, dr, cust) => ({
       sales,
       grossSales: sales,
@@ -1474,47 +1475,53 @@ describe('Store reports integration', () => {
       customerCount: cust,
     });
 
+    const SHEET = 'Weekly Sale 2025';
+    const storeKeyFor = (s) => String(s.name).toLowerCase().replace(/\s+/g, '-');
     const docs = [];
     for (let w = 1; w <= 4; w++) {
       const monthEndWeek = new Date(Date.UTC(2025, 0, 5 + (w - 1) * 7));
       const weekStart = new Date(Date.UTC(2024, 11, 30 + (w - 1) * 7));
+      const periodKey = `2025-01-W${String(w).padStart(2, '0')}`;
       docs.push({
         shop_id: mainShop._id,
-        report_type: 'weekly_financial',
-        source_type: 'excel_raw',
-        period_key: `2025-01-W${String(w).padStart(2, '0')}`,
+        store_name_raw: mainShop.name,
+        store_key: storeKeyFor(mainShop),
+        source_sheet: SHEET,
+        period_key: periodKey,
         year: 2025,
         month: 1,
         week_number: w,
         week_start: weekStart,
         week_end: monthEndWeek,
         week_range_label: 'mock',
-        store_name_raw: mainShop.name,
         metrics: baseMetrics(1000 + w * 100, 250, 220, 80, 120, 100, 100 + w * 10),
       });
       docs.push({
         shop_id: eastShop._id,
-        report_type: 'weekly_financial',
-        source_type: 'excel_raw',
-        period_key: `2025-01-W${String(w).padStart(2, '0')}`,
+        store_name_raw: eastShop.name,
+        store_key: storeKeyFor(eastShop),
+        source_sheet: SHEET,
+        period_key: periodKey,
         year: 2025,
         month: 1,
         week_number: w,
         week_start: weekStart,
         week_end: monthEndWeek,
         week_range_label: 'mock',
-        store_name_raw: eastShop.name,
         metrics: baseMetrics(800 + w * 80, 200, 180, 60, 100, 80, 80 + w * 8),
       });
     }
-    // Compare period: same 4 weeks of 2024
+    // Compare period: same 4 weeks of 2024 (main shop only) — different source_sheet
+    // so it doesn't collide with the 2025 unique index on (source_sheet, period_key, store_key).
+    const COMPARE_SHEET = 'Weekly Sale 2024';
     for (let w = 1; w <= 4; w++) {
       const monthEndWeek = new Date(Date.UTC(2024, 0, 5 + (w - 1) * 7));
       const weekStart = new Date(Date.UTC(2023, 11, 30 + (w - 1) * 7));
       docs.push({
         shop_id: mainShop._id,
-        report_type: 'weekly_financial',
-        source_type: 'excel_raw',
+        store_name_raw: mainShop.name,
+        store_key: storeKeyFor(mainShop),
+        source_sheet: COMPARE_SHEET,
         period_key: `2024-01-W${String(w).padStart(2, '0')}`,
         year: 2024,
         month: 1,
@@ -1522,11 +1529,10 @@ describe('Store reports integration', () => {
         week_start: weekStart,
         week_end: monthEndWeek,
         week_range_label: 'mock',
-        store_name_raw: mainShop.name,
         metrics: baseMetrics(900 + w * 90, 240, 210, 70, 110, 90, 90 + w * 9),
       });
     }
-    await StoreReportEntry.insertMany(docs);
+    await StoreReportWeekly2026B.insertMany(docs);
   }
 
   it('REPORT-V2-001: kpi-matrix returns total + per-shop with all metrics', async () => {
@@ -1759,5 +1765,81 @@ describe('Store reports integration', () => {
       .set('Authorization', `Bearer ${staffLogin.token}`);
 
     expect(res.status).toBe(403);
+  });
+
+  it('REPORT-V2-012: trend with report_type=monthly_store_kpi reads from MonthlySale2026 and returns reference_ids', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+    const mainShop = fixtures.shops.mainShop;
+    const eastShop = fixtures.shops.eastShop;
+    const SHEET = 'Monthly Sale 2026';
+    const storeKeyFor = (s) => String(s.name).toLowerCase().replace(/\s+/g, '-');
+
+    await StoreReportMonthlySale2026.insertMany([
+      {
+        shop_id: mainShop._id,
+        store_name_raw: mainShop.name,
+        store_key: storeKeyFor(mainShop),
+        source_sheet: SHEET,
+        period_key: '2026-05',
+        year: 2026,
+        month: 5,
+        metrics: { grossSales: 10000, netSales: 8300, labour: 1500, foodCost22: 2200 },
+      },
+      {
+        shop_id: eastShop._id,
+        store_name_raw: eastShop.name,
+        store_key: storeKeyFor(eastShop),
+        source_sheet: SHEET,
+        period_key: '2026-05',
+        year: 2026,
+        month: 5,
+        metrics: { grossSales: 8000, netSales: 6640, labour: 1200, foodCost22: 1800 },
+      },
+      {
+        shop_id: mainShop._id,
+        store_name_raw: mainShop.name,
+        store_key: storeKeyFor(mainShop),
+        source_sheet: SHEET,
+        period_key: '2026-06',
+        year: 2026,
+        month: 6,
+        metrics: { grossSales: 11000, netSales: 9130, labour: 1600, foodCost22: 2400 },
+      },
+    ]);
+
+    const res = await request(app)
+      .get('/api/store-reports/analytics/v2/trend')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({
+        from_date: '2026-05-01',
+        to_date: '2026-06-30',
+        metrics: 'grossSales,labour',
+        report_type: 'monthly_store_kpi',
+      });
+
+    expectEnvelope(res, 200);
+    expect(res.body.data.report_type).toBe('monthly_store_kpi');
+    expect(res.body.data.granularity).toBe('month');
+    expect(res.body.data.total.series).toHaveLength(2);
+    expect(res.body.data.total.series[0].periodKey).toBe('2026-05');
+    expect(res.body.data.total.series[1].periodKey).toBe('2026-06');
+    expect(res.body.data.total.series[0].reference_ids).toHaveLength(2);
+    expect(res.body.data.total.series[1].reference_ids).toHaveLength(1);
+    expect(res.body.data.total.reference_ids).toHaveLength(3);
+  });
+
+  it('REPORT-V2-013: kpi-matrix returns reference_ids at total and shop level', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+    await seedV2Records(fixtures.shops.mainShop, fixtures.shops.eastShop);
+
+    const res = await request(app)
+      .get('/api/store-reports/analytics/v2/kpi-matrix')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({ from_date: '2025-01-01', to_date: '2025-01-31' });
+
+    expectEnvelope(res, 200);
+    expect(res.body.data.total.reference_ids.current).toHaveLength(8);
+    expect(res.body.data.total.reference_ids.compare).toEqual([]);
+    expect(res.body.data.shops[0].reference_ids.current.length).toBeGreaterThan(0);
   });
 });
