@@ -35,6 +35,16 @@ the underlying rows that produced each aggregate.
 - For `monthly_store_kpi`: **forced to `month`** regardless of what is sent.
   The monthly source table has no weekly breakdown.
 
+### Weekly sources are unioned
+
+For `report_type=weekly_financial`, the backend now reads from BOTH
+`StoreReportWeekly2026B` AND `StoreReportEntry` rows with
+`source_type=admin_weekly` and unions them. Dedup is on
+`(shop_id, period_key)`; admin-entered overrides win when both sources have
+data for the same period+shop. No client-side action needed — this is
+transparent and means admin-uploaded weekly data now shows up in v2 analytics
+where it previously did not.
+
 ### `view` (deprecated, ignored)
 
 The `view` param (`excel_raw`, `admin_weekly`, `reconciled`) is **silently

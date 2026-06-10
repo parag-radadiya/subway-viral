@@ -1842,4 +1842,100 @@ describe('Store reports integration', () => {
     expect(res.body.data.total.reference_ids.compare).toEqual([]);
     expect(res.body.data.shops[0].reference_ids.current.length).toBeGreaterThan(0);
   });
+
+  it('REPORT-V2-014: trend includes admin_weekly rows from StoreReportEntry and admin overrides Weekly2026B for same period', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+    const mainShop = fixtures.shops.mainShop;
+    const SHEET = 'Weekly Sale 2026';
+    const storeKeyFor = (s) => String(s.name).toLowerCase().replace(/\s+/g, '-');
+
+    // Week 1: only Weekly2026B has data → should appear with the Weekly2026B value
+    // Week 2: BOTH tables have data → admin_weekly value should win
+    // Week 3: only StoreReportEntry (admin_weekly) has data → must still surface
+    const weekStart = (w) => new Date(Date.UTC(2026, 1, 1 + (w - 1) * 7));
+    const weekEnd = (w) => new Date(Date.UTC(2026, 1, 7 + (w - 1) * 7, 23, 59, 59, 999));
+
+    await StoreReportWeekly2026B.insertMany([
+      {
+        shop_id: mainShop._id,
+        store_name_raw: mainShop.name,
+        store_key: storeKeyFor(mainShop),
+        source_sheet: SHEET,
+        period_key: '2026-02-W01',
+        year: 2026,
+        month: 2,
+        week_number: 1,
+        week_start: weekStart(1),
+        week_end: weekEnd(1),
+        metrics: { grossSales: 1000, netSales: 830, labour: 200 },
+      },
+      {
+        shop_id: mainShop._id,
+        store_name_raw: mainShop.name,
+        store_key: storeKeyFor(mainShop),
+        source_sheet: SHEET,
+        period_key: '2026-02-W02',
+        year: 2026,
+        month: 2,
+        week_number: 2,
+        week_start: weekStart(2),
+        week_end: weekEnd(2),
+        metrics: { grossSales: 1, netSales: 1, labour: 1 }, // sentinel — must be overridden
+      },
+    ]);
+
+    await StoreReportEntry.insertMany([
+      {
+        shop_id: mainShop._id,
+        report_type: 'weekly_financial',
+        source_type: 'admin_weekly',
+        period_key: '2026-02-W02',
+        year: 2026,
+        month: 2,
+        week_number: 2,
+        week_start: weekStart(2),
+        week_end: weekEnd(2),
+        store_name_raw: mainShop.name,
+        metrics: { grossSales: 5000, netSales: 4150, labour: 800 },
+      },
+      {
+        shop_id: mainShop._id,
+        report_type: 'weekly_financial',
+        source_type: 'admin_weekly',
+        period_key: '2026-02-W03',
+        year: 2026,
+        month: 2,
+        week_number: 3,
+        week_start: weekStart(3),
+        week_end: weekEnd(3),
+        store_name_raw: mainShop.name,
+        metrics: { grossSales: 7000, netSales: 5810, labour: 1100 },
+      },
+    ]);
+
+    const res = await request(app)
+      .get('/api/store-reports/analytics/v2/trend')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({
+        from_date: '2026-02-01',
+        to_date: '2026-02-28',
+        shop_ids: String(mainShop._id),
+        metrics: 'grossSales',
+        granularity: 'week',
+      });
+
+    expectEnvelope(res, 200);
+    const series = res.body.data.total.series;
+    expect(series).toHaveLength(3);
+    // Week 1 — Weekly2026B value passes through
+    expect(series[0].weekNumber).toBe(1);
+    expect(series[0].grossSales).toBe(1000);
+    // Week 2 — admin override wins (not the sentinel `1`)
+    expect(series[1].weekNumber).toBe(2);
+    expect(series[1].grossSales).toBe(5000);
+    // Week 3 — admin-only row still appears
+    expect(series[2].weekNumber).toBe(3);
+    expect(series[2].grossSales).toBe(7000);
+    expect(res.body.data.total.reference_ids).toHaveLength(3);
+  });
 });
