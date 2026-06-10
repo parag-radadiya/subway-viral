@@ -3128,23 +3128,51 @@ function buildMonthRangeFilter(fromDate, toDate) {
 // based on report_type. Used by all v2 analytics endpoints (kpi-matrix, shop-compare,
 // period-compare, trend). The `view` param from the StoreReportEntry-era flow is
 // intentionally ignored — these canonical tables have no admin/excel split.
+//
+// Weekly side also unions admin-entered rows from StoreReportEntry (source_type=
+// admin_weekly), since the admin-weekly upsert flow writes only to StoreReportEntry
+// and would otherwise be invisible to v2 analytics. Dedup key is (shop_id, period_key);
+// admin_weekly overrides Weekly2026B for the same period+shop.
 async function fetchCanonicalRecordsForPeriod({ fromDate, toDate, shopIds, reportType }) {
   const isMonthly = reportType === 'monthly_store_kpi';
-  const Model = isMonthly ? StoreReportMonthlySale2026 : StoreReportWeekly2026B;
 
-  const filter = isMonthly
-    ? buildMonthRangeFilter(fromDate, toDate)
-    : fromDate || toDate
-      ? buildDateRangeFilter(fromDate, toDate)
-      : {};
-
-  if (shopIds && shopIds.length > 0) {
-    filter.shop_id = {
-      $in: shopIds.map((id) => new (require('mongoose').Types.ObjectId)(id)),
-    };
+  if (isMonthly) {
+    const monthlyFilter = buildMonthRangeFilter(fromDate, toDate);
+    if (shopIds && shopIds.length > 0) {
+      monthlyFilter.shop_id = {
+        $in: shopIds.map((id) => new (require('mongoose').Types.ObjectId)(id)),
+      };
+    }
+    return StoreReportMonthlySale2026.find(monthlyFilter).populate('shop_id', 'name');
   }
 
-  return Model.find(filter).populate('shop_id', 'name');
+  const dateFilter = fromDate || toDate ? buildDateRangeFilter(fromDate, toDate) : {};
+  const shopFilter =
+    shopIds && shopIds.length > 0
+      ? {
+          shop_id: {
+            $in: shopIds.map((id) => new (require('mongoose').Types.ObjectId)(id)),
+          },
+        }
+      : {};
+
+  const [weeklyRows, adminRows] = await Promise.all([
+    StoreReportWeekly2026B.find({ ...dateFilter, ...shopFilter }).populate('shop_id', 'name'),
+    StoreReportEntry.find({
+      ...dateFilter,
+      ...shopFilter,
+      report_type: 'weekly_financial',
+      source_type: 'admin_weekly',
+    }).populate('shop_id', 'name'),
+  ]);
+
+  // Dedup on (shop_id, period_key). admin_weekly takes precedence so an admin-
+  // entered override is always used when both sources have data for the same period.
+  const keyOf = (r) => `${String(r.shop_id?._id || r.shop_id || '')}::${r.period_key}`;
+  const merged = new Map();
+  for (const r of weeklyRows) merged.set(keyOf(r), r);
+  for (const r of adminRows) merged.set(keyOf(r), r);
+  return Array.from(merged.values());
 }
 
 async function fetchRecordsForPeriod({ fromDate, toDate, shopIds, reportType, view }) {
