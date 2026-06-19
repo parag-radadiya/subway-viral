@@ -2310,6 +2310,13 @@ const upsertAdminWeeklyData = asyncHandler(async (req, res) => {
       if (!weekEnd && entry.week_end) {
         weekEnd = new Date(entry.week_end);
       }
+
+      // Fall back to month boundaries so the row remains visible to date-window
+      // filters in analytics. Bucketing still uses (year, month, week_number).
+      if (!weekStart || !weekEnd) {
+        weekStart = new Date(Date.UTC(year, month - 1, 1, 0, 0, 0, 0));
+        weekEnd = new Date(Date.UTC(year, month, 0, 23, 59, 59, 999));
+      }
     }
 
     if (!entry.metrics || typeof entry.metrics !== 'object') {
@@ -2692,6 +2699,13 @@ const upsertSingleWeekly2026 = asyncHandler(async (req, res) => {
       weekEnd = parsed.weekEnd;
       weekRangeLabel = parsed.weekRangeLabel;
     }
+  }
+
+  // Fall back to month boundaries so the row remains visible to date-window
+  // filters in analytics. Bucketing still uses (year, month, week_number).
+  if (!weekStart || !weekEnd) {
+    weekStart = new Date(Date.UTC(yr, mo - 1, 1, 0, 0, 0, 0));
+    weekEnd = new Date(Date.UTC(yr, mo, 0, 23, 59, 59, 999));
   }
 
   const record = await StoreReportWeekly2026B.findOneAndUpdate(
@@ -3097,13 +3111,46 @@ function parseMetricKeys(query) {
   return requested;
 }
 
-// Build a MongoDB date filter for StoreReportEntry using week_start/week_end
+// Build a MongoDB date filter for StoreReportEntry using week_start/week_end.
+// Rows where week_start or week_end is null (admin entries without a parseable
+// week_range_label) still need to be visible to analytics, so fall back to a
+// (year, month) range match for those.
 function buildDateRangeFilter(fromDate, toDate) {
   if (!fromDate && !toDate) return {};
-  const filter = {};
-  if (fromDate) filter.week_start = { $lte: toUtcDayEnd(toDate || fromDate) };
-  if (toDate) filter.week_end = { $gte: toUtcDayStart(fromDate || toDate) };
-  return filter;
+  const fd = fromDate || toDate;
+  const td = toDate || fromDate;
+  const dayEnd = toUtcDayEnd(td);
+  const dayStart = toUtcDayStart(fd);
+  const fromKey = fd.getUTCFullYear() * 12 + fd.getUTCMonth();
+  const toKey = td.getUTCFullYear() * 12 + td.getUTCMonth();
+  return {
+    $or: [
+      { week_start: { $lte: dayEnd }, week_end: { $gte: dayStart } },
+      {
+        $and: [
+          { $or: [{ week_start: null }, { week_end: null }] },
+          {
+            $expr: {
+              $and: [
+                {
+                  $gte: [
+                    { $add: [{ $multiply: ['$year', 12] }, { $subtract: ['$month', 1] }] },
+                    fromKey,
+                  ],
+                },
+                {
+                  $lte: [
+                    { $add: [{ $multiply: ['$year', 12] }, { $subtract: ['$month', 1] }] },
+                    toKey,
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ],
+  };
 }
 
 // Build a (year, month) range filter for the canonical Monthly table.
@@ -3129,10 +3176,12 @@ function buildMonthRangeFilter(fromDate, toDate) {
 // period-compare, trend). The `view` param from the StoreReportEntry-era flow is
 // intentionally ignored — these canonical tables have no admin/excel split.
 //
-// Weekly side also unions admin-entered rows from StoreReportEntry (source_type=
-// admin_weekly), since the admin-weekly upsert flow writes only to StoreReportEntry
-// and would otherwise be invisible to v2 analytics. Dedup key is (shop_id, period_key);
-// admin_weekly overrides Weekly2026B for the same period+shop.
+// Weekly side unions three sources:
+//   1. StoreReportWeekly2026B           — current canonical weekly excel rows
+//   2. StoreReportEntry excel_raw       — legacy Jan-Dec sheet imports
+//   3. StoreReportEntry admin_weekly    — admin-typed overrides
+// Dedup key is (shop_id, period_key); later sources override earlier ones, so
+// precedence is: admin_weekly > Weekly2026B > excel_raw.
 async function fetchCanonicalRecordsForPeriod({ fromDate, toDate, shopIds, reportType }) {
   const isMonthly = reportType === 'monthly_store_kpi';
 
@@ -3156,7 +3205,13 @@ async function fetchCanonicalRecordsForPeriod({ fromDate, toDate, shopIds, repor
         }
       : {};
 
-  const [weeklyRows, adminRows] = await Promise.all([
+  const [excelRawRows, weeklyRows, adminRows] = await Promise.all([
+    StoreReportEntry.find({
+      ...dateFilter,
+      ...shopFilter,
+      report_type: 'weekly_financial',
+      source_type: 'excel_raw',
+    }).populate('shop_id', 'name'),
     StoreReportWeekly2026B.find({ ...dateFilter, ...shopFilter }).populate('shop_id', 'name'),
     StoreReportEntry.find({
       ...dateFilter,
@@ -3166,10 +3221,11 @@ async function fetchCanonicalRecordsForPeriod({ fromDate, toDate, shopIds, repor
     }).populate('shop_id', 'name'),
   ]);
 
-  // Dedup on (shop_id, period_key). admin_weekly takes precedence so an admin-
-  // entered override is always used when both sources have data for the same period.
+  // Dedup on (shop_id, period_key). Apply in precedence order so later writes
+  // overwrite earlier ones: excel_raw → Weekly2026B → admin_weekly.
   const keyOf = (r) => `${String(r.shop_id?._id || r.shop_id || '')}::${r.period_key}`;
   const merged = new Map();
+  for (const r of excelRawRows) merged.set(keyOf(r), r);
   for (const r of weeklyRows) merged.set(keyOf(r), r);
   for (const r of adminRows) merged.set(keyOf(r), r);
   return Array.from(merged.values());
