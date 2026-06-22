@@ -8,6 +8,7 @@ const {
   getAttendance,
   getAttendanceByDateRange,
   getAttendanceSummaryByUser,
+  getShopStaffShifts,
   getEligibleRotas,
   reconcileAllOverdue,
   reconcileSelfOverdue,
@@ -440,6 +441,131 @@ router.get('/summary-by-user', protect, getAttendanceSummaryByUser);
  */
 
 router.get('/range', protect, getAttendanceByDateRange);
+
+/**
+ * @swagger
+ * /api/attendance/staff-shifts:
+ *   get:
+ *     summary: List shop staff with their attendance shifts in a date range
+ *     tags: [Attendance]
+ *     security:
+ *       - BearerAuth: []
+ *     description: |
+ *       For a given `shop_id` and date range (e.g. one month), returns each staff member
+ *       who has attendance in that range together with all their attendance records
+ *       ("shifts") and per-staff total work hours. Pagination is over staff members —
+ *       each page returns the full list of shifts for the staff on that page, so the
+ *       mobile app can render a staff list and expand each staff to see their shifts.
+ *     parameters:
+ *       - in: query
+ *         name: shop_id
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: from_date
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: date
+ *       - in: query
+ *         name: to_date
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: date
+ *       - in: query
+ *         name: user_id
+ *         schema:
+ *           type: string
+ *         description: Optional — limit to one staff member
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           default: 1
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 20
+ *           maximum: 100
+ *         description: Number of staff per page
+ *       - in: query
+ *         name: sort_by
+ *         schema:
+ *           type: string
+ *           enum: [total_work_hours, name]
+ *           default: total_work_hours
+ *       - in: query
+ *         name: sort_dir
+ *         schema:
+ *           type: string
+ *           enum: [asc, desc]
+ *           default: desc
+ *       - in: query
+ *         name: shift_order
+ *         schema:
+ *           type: string
+ *           enum: [asc, desc]
+ *           default: asc
+ *         description: Order of shifts inside each staff member
+ *     responses:
+ *       200:
+ *         description: Shop staff shifts fetched successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 message: { type: string }
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     total: { type: integer, description: Total number of staff with attendance in range }
+ *                     page: { type: integer }
+ *                     limit: { type: integer }
+ *                     total_pages: { type: integer }
+ *                     count: { type: integer }
+ *                     from_date: { type: string, format: date-time }
+ *                     to_date: { type: string, format: date-time }
+ *                     shop_id: { type: string }
+ *                     user_id: { type: string, nullable: true }
+ *                     sort_by: { type: string }
+ *                     sort_dir: { type: string, enum: [asc, desc] }
+ *                     shift_order: { type: string, enum: [asc, desc] }
+ *                     total_work_hours: { type: number, description: Sum across entire range }
+ *                     total_actual_hours: { type: number }
+ *                     staff:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           user_id: { type: string }
+ *                           name: { type: string, nullable: true }
+ *                           email: { type: string, nullable: true }
+ *                           records_count: { type: integer }
+ *                           total_work_minutes: { type: integer }
+ *                           total_work_hours: { type: number }
+ *                           total_actual_minutes: { type: integer }
+ *                           total_actual_hours: { type: number }
+ *                           first_punch_in: { type: string, format: date-time, nullable: true }
+ *                           last_punch_out: { type: string, format: date-time, nullable: true }
+ *                           shifts:
+ *                             type: array
+ *                             items:
+ *                               allOf:
+ *                                 - $ref: '#/components/schemas/Attendance'
+ *                                 - type: object
+ *                                   properties:
+ *                                     work_minutes: { type: integer }
+ *                                     work_hours: { type: number }
+ *                                     shift_date: { type: string, example: "2026-06-20" }
+ *       400:
+ *         description: Missing/invalid shop_id or date range
+ */
+router.get('/staff-shifts', protect, getShopStaffShifts);
 
 /**
  * @swagger

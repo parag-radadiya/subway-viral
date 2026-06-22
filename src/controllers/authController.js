@@ -64,6 +64,7 @@ const login = asyncHandler(async (req, res) => {
 
   const user = await User.findOne({ email }).select('+password_hash').populate('role_id');
 
+  console.log(`Login attempt for email: ${email}, user found: ${!!user}`);
   if (!user || !(await user.matchPassword(password))) {
     throw new AppError('Invalid credentials', 400);
   }
