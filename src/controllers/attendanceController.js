@@ -1354,6 +1354,228 @@ const getAttendanceSummaryByUser = asyncHandler(async (req, res) => {
   });
 });
 
+// GET attendance records for a shop's staff in a date range, grouped per staff member
+// GET /api/attendance/staff-shifts
+const getShopStaffShifts = asyncHandler(async (req, res) => {
+  await runAutoPunchOutSweep();
+  const roleName = String(req.user?.role_id?.role_name || '')
+    .trim()
+    .toLowerCase();
+  const isRootViewer = roleName === 'root';
+  const isAdminViewer = roleName === 'admin';
+
+  const fromDate = toUtcStartOfDay(req.query.from_date);
+  const toDate = toUtcEndOfDay(req.query.to_date);
+  if (!fromDate || !toDate) {
+    throw new AppError('from_date and to_date are required and must be valid ISO dates', 400);
+  }
+  if (toDate < fromDate) {
+    throw new AppError('to_date must be greater than or equal to from_date', 400);
+  }
+
+  const requestedShopId = req.query.shop_id ? String(req.query.shop_id) : null;
+  if (!requestedShopId) {
+    throw new AppError('shop_id is required', 400);
+  }
+
+  const scope = buildReadScope(req.user);
+  const isGlobalViewer = scope.mode === 'all' || isAdminViewer;
+  const { page, limit, skip } = parsePagination(req.query, {
+    defaultSortBy: 'createdAt',
+    allowedSortBy: ['createdAt'],
+  });
+  const sortBy = String(req.query.sort_by || 'total_work_hours').trim();
+  const sortDir = String(req.query.sort_dir || 'desc').toLowerCase() === 'asc' ? 1 : -1;
+  const shiftOrder = String(req.query.shift_order || 'asc').toLowerCase() === 'desc' ? -1 : 1;
+
+  const emptyResponse = () =>
+    sendSuccess(res, 'Shop staff shifts fetched successfully', {
+      ...toPageMeta(0, page, limit, 0),
+      from_date: fromDate.toISOString(),
+      to_date: toDate.toISOString(),
+      shop_id: requestedShopId,
+      user_id: req.query.user_id || null,
+      sort_by: sortBy,
+      sort_dir: sortDir === 1 ? 'asc' : 'desc',
+      total_work_hours: 0,
+      total_actual_hours: 0,
+      staff: [],
+    });
+
+  if (!isRootViewer && isGlobalViewer) {
+    const shopScope = buildShopScope(req.user);
+    const enforcedShopIds = Array.isArray(shopScope.ids)
+      ? shopScope.ids.map((id) => String(id))
+      : [];
+    if (
+      !isAdminViewer &&
+      enforcedShopIds.length > 0 &&
+      !enforcedShopIds.includes(requestedShopId)
+    ) {
+      return emptyResponse();
+    }
+  } else if (scope.mode === 'shops') {
+    if (!scope.shopScope.all && !isShopAllowed(scope.shopScope, requestedShopId)) {
+      return emptyResponse();
+    }
+  } else if (scope.mode === 'self') {
+    // Self-scope users may only see their own data even when scoped to a shop.
+    if (req.query.user_id && String(req.query.user_id) !== String(req.user._id)) {
+      return emptyResponse();
+    }
+  }
+
+  const filter = {
+    is_active: { $ne: false },
+    shop_id: requestedShopId,
+    punch_in: { $gte: fromDate, $lte: toDate },
+  };
+  if (scope.mode === 'self') {
+    filter.user_id = req.user._id;
+  } else if (req.query.user_id) {
+    filter.user_id = req.query.user_id;
+  }
+
+  const match = buildAttendanceMatch(filter);
+  const actualMinutesExpr = {
+    $cond: [
+      { $and: [{ $ne: ['$punch_in', null] }, { $ne: ['$punch_out', null] }] },
+      { $divide: [{ $subtract: ['$punch_out', '$punch_in'] }, 60000] },
+      0,
+    ],
+  };
+  const workMinutesExpr = isRootViewer
+    ? actualMinutesExpr
+    : {
+        $ifNull: ['$effective_minutes', { $ifNull: ['$adjusted_minutes', actualMinutesExpr] }],
+      };
+
+  const sortStage =
+    sortBy === 'name'
+      ? { name: sortDir, total_work_minutes: -1 }
+      : { total_work_minutes: sortDir, name: 1 };
+
+  const [result, totalsAgg] = await Promise.all([
+    Attendance.aggregate([
+      { $match: match },
+      {
+        $group: {
+          _id: '$user_id',
+          records_count: { $sum: 1 },
+          total_actual_minutes: { $sum: { $max: [0, actualMinutesExpr] } },
+          total_work_minutes: { $sum: { $max: [0, workMinutesExpr] } },
+          first_punch_in: { $min: '$punch_in' },
+          last_punch_out: { $max: '$punch_out' },
+        },
+      },
+      {
+        $lookup: {
+          from: 'users',
+          localField: '_id',
+          foreignField: '_id',
+          as: 'user',
+        },
+      },
+      { $unwind: { path: '$user', preserveNullAndEmptyArrays: true } },
+      {
+        $project: {
+          _id: 0,
+          user_id: '$_id',
+          name: { $ifNull: ['$user.name', null] },
+          email: { $ifNull: ['$user.email', null] },
+          records_count: 1,
+          total_actual_minutes: 1,
+          total_work_minutes: 1,
+          first_punch_in: 1,
+          last_punch_out: 1,
+        },
+      },
+      { $sort: sortStage },
+      {
+        $facet: {
+          meta: [{ $count: 'total' }],
+          data: [{ $skip: skip }, { $limit: limit }],
+        },
+      },
+    ]),
+    Attendance.aggregate([
+      { $match: match },
+      {
+        $group: {
+          _id: null,
+          total_actual_minutes: { $sum: { $max: [0, actualMinutesExpr] } },
+          total_work_minutes: { $sum: { $max: [0, workMinutesExpr] } },
+        },
+      },
+    ]),
+  ]);
+
+  const aggResult = result[0] || { meta: [], data: [] };
+  const total = aggResult.meta?.[0]?.total || 0;
+  const userBuckets = aggResult.data || [];
+  const totals = totalsAgg[0] || { total_actual_minutes: 0, total_work_minutes: 0 };
+
+  let shiftsByUser = new Map();
+  if (userBuckets.length > 0) {
+    const userIds = userBuckets.map((b) => b.user_id);
+    const records = await Attendance.find({ ...filter, user_id: { $in: userIds } })
+      .populate('shop_id', 'name')
+      .populate('rota_id', 'shift_start shift_end shift_date start_time end_time note')
+      .populate('manual_by', 'name email')
+      .sort({ punch_in: shiftOrder });
+
+    for (const record of records) {
+      const dto = record.toObject();
+      if (!isRootViewer && record.effective_start && record.effective_end) {
+        dto.punch_in = record.effective_start;
+        dto.punch_out = record.effective_end;
+      }
+      const workMinutes = isRootViewer
+        ? minutesBetween(record.punch_in, record.punch_out)
+        : (record.effective_minutes ??
+          record.adjusted_minutes ??
+          minutesBetween(record.punch_in, record.punch_out));
+      dto.work_minutes = Math.max(0, Math.round(workMinutes || 0));
+      dto.work_hours = toHours(dto.work_minutes);
+      dto.shift_date = record.punch_in
+        ? new Date(record.punch_in).toISOString().slice(0, 10)
+        : null;
+
+      const key = String(record.user_id);
+      if (!shiftsByUser.has(key)) shiftsByUser.set(key, []);
+      shiftsByUser.get(key).push(dto);
+    }
+  }
+
+  const staff = userBuckets.map((bucket) => ({
+    user_id: String(bucket.user_id),
+    name: bucket.name,
+    email: bucket.email,
+    records_count: bucket.records_count,
+    total_work_minutes: Math.round(bucket.total_work_minutes || 0),
+    total_work_hours: toHours(bucket.total_work_minutes || 0),
+    total_actual_minutes: Math.round(bucket.total_actual_minutes || 0),
+    total_actual_hours: toHours(bucket.total_actual_minutes || 0),
+    first_punch_in: bucket.first_punch_in || null,
+    last_punch_out: bucket.last_punch_out || null,
+    shifts: shiftsByUser.get(String(bucket.user_id)) || [],
+  }));
+
+  return sendSuccess(res, 'Shop staff shifts fetched successfully', {
+    ...toPageMeta(total, page, limit, staff.length),
+    from_date: fromDate.toISOString(),
+    to_date: toDate.toISOString(),
+    shop_id: requestedShopId,
+    user_id: req.query.user_id || null,
+    sort_by: sortBy,
+    sort_dir: sortDir === 1 ? 'asc' : 'desc',
+    shift_order: shiftOrder === 1 ? 'asc' : 'desc',
+    total_work_hours: toHours(totals.total_work_minutes || 0),
+    total_actual_hours: toHours(totals.total_actual_minutes || 0),
+    staff,
+  });
+});
+
 const getEligibleRotas = asyncHandler(async (req, res) => {
   await runAutoPunchOutSweep();
   const { shop_id } = req.query;
@@ -1986,6 +2208,7 @@ module.exports = {
   getAttendance,
   getAttendanceByDateRange,
   getAttendanceSummaryByUser,
+  getShopStaffShifts,
   getEligibleRotas,
   reconcileAllOverdue,
   reconcileSelfOverdue,
