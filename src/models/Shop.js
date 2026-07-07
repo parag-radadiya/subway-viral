@@ -16,6 +16,12 @@ const shopSchema = new mongoose.Schema(
       required: [true, 'Shop name is required'],
       trim: true,
     },
+    store_identifier: {
+      type: String,
+      trim: true,
+      default: null,
+      // Printed on reports as "Name(store_identifier)", e.g. "Paddington London(30324)".
+    },
     aliases: {
       type: [{ type: String, trim: true }],
       default: [],

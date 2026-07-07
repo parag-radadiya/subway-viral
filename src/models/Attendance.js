@@ -103,6 +103,40 @@ const attendanceSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    breaks: {
+      type: [
+        {
+          break_start: {
+            type: Date,
+            required: true,
+          },
+          break_end: {
+            type: Date,
+            default: null,
+          },
+          break_type: {
+            type: String,
+            enum: ['Lunch', 'Other'],
+            default: 'Lunch',
+          },
+          duration_minutes: {
+            type: Number,
+            default: null,
+            min: 0,
+          },
+          is_manual: {
+            type: Boolean,
+            default: false,
+          },
+          manual_by: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User',
+            default: null,
+          },
+        },
+      ],
+      default: [],
+    },
   },
   { timestamps: true }
 );

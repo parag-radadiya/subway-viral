@@ -4,6 +4,8 @@ const {
   verifyLocation,
   punchIn,
   punchOut,
+  breakStart,
+  breakEnd,
   manualPunchIn,
   getAttendance,
   getAttendanceByDateRange,
@@ -333,6 +335,76 @@ router.put('/:id/punch-out', protect, punchOut);
 
 /**
  * @swagger
+ * /api/attendance/{id}/break-start:
+ *   post:
+ *     summary: Start a lunch break on an open attendance record
+ *     tags: [Attendance]
+ *     security:
+ *       - BearerAuth: []
+ *     description: |
+ *       Starts a break on an attendance record that is still punched in.
+ *       Staff can start their own break; a manager/sub-manager with
+ *       `can_manual_punch` may start a break on behalf of another staff
+ *       member. Fails if punched out already, or if a break is already open.
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Attendance record ID
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               break_type:
+ *                 type: string
+ *                 enum: [Lunch, Other]
+ *                 default: Lunch
+ *     responses:
+ *       200:
+ *         description: Break started
+ *       400:
+ *         description: Already punched out, or a break is already in progress
+ *       403:
+ *         description: Not authorised to manage this staff member's break
+ *       404:
+ *         description: Attendance record not found
+ */
+router.post('/:id/break-start', protect, breakStart);
+
+/**
+ * @swagger
+ * /api/attendance/{id}/break-end:
+ *   put:
+ *     summary: End the currently open lunch break on an attendance record
+ *     tags: [Attendance]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Attendance record ID
+ *     responses:
+ *       200:
+ *         description: Break ended
+ *       400:
+ *         description: No break currently in progress
+ *       403:
+ *         description: Not authorised to manage this staff member's break
+ *       404:
+ *         description: Attendance record not found
+ */
+router.put('/:id/break-end', protect, breakEnd);
+
+/**
+ * @swagger
  * /api/attendance/summary-by-user:
  *   get:
  *     summary: Group attendance by user with total work hours
@@ -451,17 +523,24 @@ router.get('/range', protect, getAttendanceByDateRange);
  *     security:
  *       - BearerAuth: []
  *     description: |
- *       For a given `shop_id` and date range (e.g. one month), returns each staff member
- *       who has attendance in that range together with all their attendance records
+ *       For a given date range (e.g. one month), returns each staff member who has
+ *       attendance in that range together with all their attendance records
  *       ("shifts") and per-staff total work hours. Pagination is over staff members —
  *       each page returns the full list of shifts for the staff on that page, so the
  *       mobile app can render a staff list and expand each staff to see their shifts.
+ *
+ *       `shop_id` is optional. When omitted, results span every shop the caller is
+ *       allowed to see (root/admin: all shops; shop-scoped managers: their assigned
+ *       shops; self-scoped staff: their own shifts regardless of shop). Each shift in
+ *       the response still carries its own populated `shop_id` so multi-shop results
+ *       remain attributable.
  *     parameters:
  *       - in: query
  *         name: shop_id
- *         required: true
+ *         required: false
  *         schema:
  *           type: string
+ *         description: Optional — restrict to one shop. Omit to span all shops in the caller's scope.
  *       - in: query
  *         name: from_date
  *         required: true

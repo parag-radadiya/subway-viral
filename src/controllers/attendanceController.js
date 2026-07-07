@@ -52,6 +52,141 @@ function toHours(minutes) {
   return Number((minutes / 60).toFixed(2));
 }
 
+const REPORT_MONTH_ABBR = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+];
+const REPORT_WEEKDAY_NAMES = [
+  'Sunday',
+  'Monday',
+  'Tuesday',
+  'Wednesday',
+  'Thursday',
+  'Friday',
+  'Saturday',
+];
+
+// "28 Apr 2026" — matches the printed payroll report header format.
+function formatReportDate(date) {
+  const d = new Date(date);
+  return `${d.getUTCDate()} ${REPORT_MONTH_ABBR[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+}
+
+// "26 Apr 2026 14:22"
+function formatReportDateTime(date) {
+  const d = new Date(date);
+  const hh = String(d.getUTCHours()).padStart(2, '0');
+  const mm = String(d.getUTCMinutes()).padStart(2, '0');
+  return `${formatReportDate(d)} ${hh}:${mm}`;
+}
+
+// "22/04/2026"
+function formatDDMMYYYY(date) {
+  const d = new Date(date);
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  return `${dd}/${mm}/${d.getUTCFullYear()}`;
+}
+
+function reportWeekdayName(date) {
+  return REPORT_WEEKDAY_NAMES[new Date(date).getUTCDay()];
+}
+
+function buildShopReportDisplayName(shop) {
+  return shop.store_identifier ? `${shop.name}(${shop.store_identifier})` : shop.name;
+}
+
+function sumBreakMinutes(breaks) {
+  if (!Array.isArray(breaks)) return 0;
+  return breaks.reduce((sum, entry) => {
+    if (!entry || !entry.break_end) return sum;
+    const duration =
+      entry.duration_minutes !== null && entry.duration_minutes !== undefined
+        ? Number(entry.duration_minutes)
+        : minutesBetween(entry.break_start, entry.break_end);
+    return sum + Math.max(0, duration);
+  }, 0);
+}
+
+function findOpenBreak(attendance) {
+  return (attendance.breaks || []).find((entry) => !entry.break_end);
+}
+
+// Computed break fields attached to attendance records for admin/report screens.
+function buildBreakSummary(record) {
+  const breaks = record.breaks || [];
+  const totalBreakMinutes = sumBreakMinutes(breaks);
+  return {
+    total_break_minutes: totalBreakMinutes,
+    total_break_hours: toHours(totalBreakMinutes),
+    breaks_count: breaks.length,
+    is_on_break: Boolean(findOpenBreak(record)),
+  };
+}
+
+function netMinutesBetween(punchIn, punchOut, breaks) {
+  return Math.max(0, minutesBetween(punchIn, punchOut) - sumBreakMinutes(breaks));
+}
+
+// Per-document sum of closed break minutes, for use inside aggregation pipelines.
+function breakMinutesExpr() {
+  return {
+    $sum: {
+      $map: {
+        input: { $ifNull: ['$breaks', []] },
+        as: 'b',
+        in: {
+          $cond: [
+            { $ne: ['$$b.break_end', null] },
+            {
+              $ifNull: [
+                '$$b.duration_minutes',
+                { $divide: [{ $subtract: ['$$b.break_end', '$$b.break_start'] }, 60000] },
+              ],
+            },
+            0,
+          ],
+        },
+      },
+    },
+  };
+}
+
+// Actual worked minutes = raw punch span minus closed break time.
+function buildActualMinutesExpr() {
+  return {
+    $subtract: [
+      {
+        $cond: [
+          { $and: [{ $ne: ['$punch_in', null] }, { $ne: ['$punch_out', null] }] },
+          { $divide: [{ $subtract: ['$punch_out', '$punch_in'] }, 60000] },
+          0,
+        ],
+      },
+      breakMinutesExpr(),
+    ],
+  };
+}
+
+// Root viewers see raw actual minutes; everyone else sees the admin-adjusted
+// effective/adjusted minutes when set, falling back to break-netted actual minutes.
+function buildWorkMinutesExpr(isRootViewer) {
+  const actualMinutesExpr = buildActualMinutesExpr();
+  return isRootViewer
+    ? actualMinutesExpr
+    : { $ifNull: ['$effective_minutes', { $ifNull: ['$adjusted_minutes', actualMinutesExpr] }] };
+}
+
 function buildAttendanceMatch(filter) {
   const match = { ...filter };
 
@@ -494,7 +629,7 @@ function assertCanAdjustForShop(user, shopId) {
 function buildAdjustmentPlan(records, targetMinutes) {
   const withActual = records.map((record) => ({
     record,
-    actualMinutes: minutesBetween(record.punch_in, record.punch_out),
+    actualMinutes: netMinutesBetween(record.punch_in, record.punch_out, record.breaks),
   }));
 
   const actualMinutesTotal = withActual.reduce((sum, item) => sum + item.actualMinutes, 0);
@@ -792,12 +927,92 @@ const punchOut = asyncHandler(async (req, res) => {
   if (attendance.punch_out) {
     throw new AppError('Already punched out', 400);
   }
+  if (findOpenBreak(attendance)) {
+    throw new AppError('Please end your lunch break before punching out', 400);
+  }
 
   attendance.punch_out = new Date();
   attendance.punch_out_source = 'Manual';
   await attendance.save();
 
   return sendSuccess(res, 'Punch-out successful', { attendance });
+});
+
+function hasPermission(user, permission) {
+  return Boolean(user?.role_id?.permissions?.[permission]);
+}
+
+// Owner may always manage their own break. A non-owner needs the same
+// permission that gates the manual-punch-in exception flow.
+function assertCanActOnBreak(user, attendance) {
+  const isOwner = attendance.user_id.toString() === user._id.toString();
+  if (isOwner) return { isManual: false };
+
+  if (!hasPermission(user, 'can_manual_punch')) {
+    throw new AppError('Forbidden: not allowed to manage break for this staff member', 403);
+  }
+  return { isManual: true };
+}
+
+// ─────────────────────────────────────────────
+// Start Lunch Break
+// POST /api/attendance/:id/break-start
+// Self-service by default; a manager/sub-manager with can_manual_punch may
+// start a break on behalf of another staff member's open attendance record.
+// ─────────────────────────────────────────────
+const breakStart = asyncHandler(async (req, res) => {
+  await runAutoPunchOutSweep();
+  const attendance = await Attendance.findById(req.params.id);
+
+  if (!attendance || attendance.is_active === false) {
+    throw new AppError('Attendance record not found', 404);
+  }
+  if (attendance.punch_out) {
+    throw new AppError('Cannot start a break on a shift that has already been punched out', 400);
+  }
+
+  const { isManual } = assertCanActOnBreak(req.user, attendance);
+
+  if (findOpenBreak(attendance)) {
+    throw new AppError('A break is already in progress', 400);
+  }
+
+  const breakType = req.body?.break_type === 'Other' ? 'Other' : 'Lunch';
+  attendance.breaks.push({
+    break_start: new Date(),
+    break_type: breakType,
+    is_manual: isManual,
+    manual_by: isManual ? req.user._id : null,
+  });
+  await attendance.save();
+
+  return sendSuccess(res, 'Break started successfully', { attendance });
+});
+
+// ─────────────────────────────────────────────
+// End Lunch Break
+// PUT /api/attendance/:id/break-end
+// ─────────────────────────────────────────────
+const breakEnd = asyncHandler(async (req, res) => {
+  const attendance = await Attendance.findById(req.params.id);
+
+  if (!attendance || attendance.is_active === false) {
+    throw new AppError('Attendance record not found', 404);
+  }
+
+  assertCanActOnBreak(req.user, attendance);
+
+  const openBreak = findOpenBreak(attendance);
+  if (!openBreak) {
+    throw new AppError('No break is currently in progress', 400);
+  }
+
+  const now = new Date();
+  openBreak.break_end = now;
+  openBreak.duration_minutes = minutesBetween(openBreak.break_start, now);
+  await attendance.save();
+
+  return sendSuccess(res, 'Break ended successfully', { attendance });
 });
 
 // ─────────────────────────────────────────────
@@ -976,7 +1191,7 @@ const getAttendance = asyncHandler(async (req, res) => {
   ]);
 
   const actualMinutes = records.reduce(
-    (sum, record) => sum + minutesBetween(record.punch_in, record.punch_out),
+    (sum, record) => sum + netMinutesBetween(record.punch_in, record.punch_out, record.breaks),
     0
   );
   const adjustedMinutes = records.reduce((sum, record) => {
@@ -984,20 +1199,18 @@ const getAttendance = asyncHandler(async (req, res) => {
       return sum + Math.max(0, Number(record.effective_minutes));
     }
     if (record.adjusted_minutes === null || record.adjusted_minutes === undefined) {
-      return sum + minutesBetween(record.punch_in, record.punch_out);
+      return sum + netMinutesBetween(record.punch_in, record.punch_out, record.breaks);
     }
     return sum + Math.max(0, Number(record.adjusted_minutes));
   }, 0);
 
   const visibleRecords = records.map((record) => {
-    if (isRootViewer) return record;
-
     const dto = record.toObject();
-    if (record.effective_start && record.effective_end) {
+    if (!isRootViewer && record.effective_start && record.effective_end) {
       dto.punch_in = record.effective_start;
       dto.punch_out = record.effective_end;
     }
-    return dto;
+    return { ...dto, ...buildBreakSummary(record) };
   });
 
   return sendSuccess(res, 'Attendance records fetched successfully', {
@@ -1063,6 +1276,7 @@ const getAttendanceByDateRange = asyncHandler(async (req, res) => {
         shop_id: requestedShopId,
         total_work_hours: 0,
         total_actual_hours: 0,
+        total_break_hours: 0,
         records: [],
       });
     }
@@ -1087,6 +1301,7 @@ const getAttendanceByDateRange = asyncHandler(async (req, res) => {
         shop_id: requestedShopId,
         total_work_hours: 0,
         total_actual_hours: 0,
+        total_break_hours: 0,
         records: [],
       });
     }
@@ -1102,6 +1317,7 @@ const getAttendanceByDateRange = asyncHandler(async (req, res) => {
         shop_id: requestedShopId,
         total_work_hours: 0,
         total_actual_hours: 0,
+        total_break_hours: 0,
         records: [],
       });
     }
@@ -1109,18 +1325,8 @@ const getAttendanceByDateRange = asyncHandler(async (req, res) => {
   }
 
   const match = buildAttendanceMatch(filter);
-  const actualMinutesExpr = {
-    $cond: [
-      { $and: [{ $ne: ['$punch_in', null] }, { $ne: ['$punch_out', null] }] },
-      { $divide: [{ $subtract: ['$punch_out', '$punch_in'] }, 60000] },
-      0,
-    ],
-  };
-  const workMinutesExpr = isRootViewer
-    ? actualMinutesExpr
-    : {
-        $ifNull: ['$effective_minutes', { $ifNull: ['$adjusted_minutes', actualMinutesExpr] }],
-      };
+  const actualMinutesExpr = buildActualMinutesExpr();
+  const workMinutesExpr = buildWorkMinutesExpr(isRootViewer);
 
   const [total, records, totalsAgg] = await Promise.all([
     Attendance.countDocuments(filter),
@@ -1139,22 +1345,25 @@ const getAttendanceByDateRange = asyncHandler(async (req, res) => {
           _id: null,
           total_actual_minutes: { $sum: { $max: [0, actualMinutesExpr] } },
           total_work_minutes: { $sum: { $max: [0, workMinutesExpr] } },
+          total_break_minutes: { $sum: breakMinutesExpr() },
         },
       },
     ]),
   ]);
 
-  const totals = totalsAgg[0] || { total_actual_minutes: 0, total_work_minutes: 0 };
+  const totals = totalsAgg[0] || {
+    total_actual_minutes: 0,
+    total_work_minutes: 0,
+    total_break_minutes: 0,
+  };
 
   const visibleRecords = records.map((record) => {
-    if (isRootViewer) return record;
-
     const dto = record.toObject();
-    if (record.effective_start && record.effective_end) {
+    if (!isRootViewer && record.effective_start && record.effective_end) {
       dto.punch_in = record.effective_start;
       dto.punch_out = record.effective_end;
     }
-    return dto;
+    return { ...dto, ...buildBreakSummary(record) };
   });
 
   return sendSuccess(res, 'Attendance range records fetched successfully', {
@@ -1164,6 +1373,7 @@ const getAttendanceByDateRange = asyncHandler(async (req, res) => {
     shop_id: requestedShopId,
     total_work_hours: toHours(totals.total_work_minutes || 0),
     total_actual_hours: toHours(totals.total_actual_minutes || 0),
+    total_break_hours: toHours(totals.total_break_minutes || 0),
     records: visibleRecords,
   });
 });
@@ -1275,19 +1485,8 @@ const getAttendanceSummaryByUser = asyncHandler(async (req, res) => {
     match.shop_id = { $in: match.shop_id.$in.map((id) => toObjectIdIfValid(String(id))) };
   }
 
-  const actualMinutesExpr = {
-    $cond: [
-      { $and: [{ $ne: ['$punch_in', null] }, { $ne: ['$punch_out', null] }] },
-      { $divide: [{ $subtract: ['$punch_out', '$punch_in'] }, 60000] },
-      0,
-    ],
-  };
-
-  const workMinutesExpr = isRootViewer
-    ? actualMinutesExpr
-    : {
-        $ifNull: ['$effective_minutes', { $ifNull: ['$adjusted_minutes', actualMinutesExpr] }],
-      };
+  const actualMinutesExpr = buildActualMinutesExpr();
+  const workMinutesExpr = buildWorkMinutesExpr(isRootViewer);
 
   const sortStage =
     sortBy === 'name'
@@ -1302,6 +1501,7 @@ const getAttendanceSummaryByUser = asyncHandler(async (req, res) => {
         records_count: { $sum: 1 },
         total_actual_minutes: { $sum: { $max: [0, actualMinutesExpr] } },
         total_work_minutes: { $sum: { $max: [0, workMinutesExpr] } },
+        total_break_minutes: { $sum: breakMinutesExpr() },
       },
     },
     {
@@ -1322,6 +1522,7 @@ const getAttendanceSummaryByUser = asyncHandler(async (req, res) => {
         records_count: 1,
         total_actual_minutes: 1,
         total_work_minutes: 1,
+        total_break_minutes: 1,
       },
     },
     { $sort: sortStage },
@@ -1341,6 +1542,7 @@ const getAttendanceSummaryByUser = asyncHandler(async (req, res) => {
     records_count: item.records_count,
     total_work_hours: toHours(item.total_work_minutes),
     total_actual_hours: toHours(item.total_actual_minutes),
+    total_break_hours: toHours(item.total_break_minutes || 0),
   }));
 
   return sendSuccess(res, 'Attendance summary by user fetched successfully', {
@@ -1374,9 +1576,6 @@ const getShopStaffShifts = asyncHandler(async (req, res) => {
   }
 
   const requestedShopId = req.query.shop_id ? String(req.query.shop_id) : null;
-  if (!requestedShopId) {
-    throw new AppError('shop_id is required', 400);
-  }
 
   const scope = buildReadScope(req.user);
   const isGlobalViewer = scope.mode === 'all' || isAdminViewer;
@@ -1399,26 +1598,40 @@ const getShopStaffShifts = asyncHandler(async (req, res) => {
       sort_dir: sortDir === 1 ? 'asc' : 'desc',
       total_work_hours: 0,
       total_actual_hours: 0,
+      total_break_hours: 0,
       staff: [],
     });
 
+  let enforcedShopIds = null;
   if (!isRootViewer && isGlobalViewer) {
     const shopScope = buildShopScope(req.user);
-    const enforcedShopIds = Array.isArray(shopScope.ids)
-      ? shopScope.ids.map((id) => String(id))
-      : [];
+    enforcedShopIds = Array.isArray(shopScope.ids) ? shopScope.ids.map((id) => String(id)) : [];
+  }
+
+  if (requestedShopId) {
     if (
+      !isRootViewer &&
+      isGlobalViewer &&
       !isAdminViewer &&
+      enforcedShopIds &&
       enforcedShopIds.length > 0 &&
       !enforcedShopIds.includes(requestedShopId)
     ) {
       return emptyResponse();
     }
-  } else if (scope.mode === 'shops') {
-    if (!scope.shopScope.all && !isShopAllowed(scope.shopScope, requestedShopId)) {
+    if (
+      scope.mode === 'shops' &&
+      !scope.shopScope.all &&
+      !isShopAllowed(scope.shopScope, requestedShopId)
+    ) {
       return emptyResponse();
     }
-  } else if (scope.mode === 'self') {
+  } else if (scope.mode === 'shops' && !scope.shopScope.all && scope.shopScope.ids.length === 0) {
+    // Shop-scoped viewer with no assigned shops and no explicit shop_id — nothing to show.
+    return emptyResponse();
+  }
+
+  if (scope.mode === 'self') {
     // Self-scope users may only see their own data even when scoped to a shop.
     if (req.query.user_id && String(req.query.user_id) !== String(req.user._id)) {
       return emptyResponse();
@@ -1427,9 +1640,18 @@ const getShopStaffShifts = asyncHandler(async (req, res) => {
 
   const filter = {
     is_active: { $ne: false },
-    shop_id: requestedShopId,
     punch_in: { $gte: fromDate, $lte: toDate },
   };
+
+  if (requestedShopId) {
+    filter.shop_id = requestedShopId;
+  } else if (scope.mode === 'shops' && !scope.shopScope.all) {
+    // No shop_id given — restrict to every shop this manager is assigned to.
+    filter.shop_id = { $in: scope.shopScope.ids };
+  } else if (!isRootViewer && isGlobalViewer && !isAdminViewer && enforcedShopIds?.length > 0) {
+    filter.shop_id = { $in: enforcedShopIds };
+  }
+
   if (scope.mode === 'self') {
     filter.user_id = req.user._id;
   } else if (req.query.user_id) {
@@ -1437,18 +1659,8 @@ const getShopStaffShifts = asyncHandler(async (req, res) => {
   }
 
   const match = buildAttendanceMatch(filter);
-  const actualMinutesExpr = {
-    $cond: [
-      { $and: [{ $ne: ['$punch_in', null] }, { $ne: ['$punch_out', null] }] },
-      { $divide: [{ $subtract: ['$punch_out', '$punch_in'] }, 60000] },
-      0,
-    ],
-  };
-  const workMinutesExpr = isRootViewer
-    ? actualMinutesExpr
-    : {
-        $ifNull: ['$effective_minutes', { $ifNull: ['$adjusted_minutes', actualMinutesExpr] }],
-      };
+  const actualMinutesExpr = buildActualMinutesExpr();
+  const workMinutesExpr = buildWorkMinutesExpr(isRootViewer);
 
   const sortStage =
     sortBy === 'name'
@@ -1464,6 +1676,7 @@ const getShopStaffShifts = asyncHandler(async (req, res) => {
           records_count: { $sum: 1 },
           total_actual_minutes: { $sum: { $max: [0, actualMinutesExpr] } },
           total_work_minutes: { $sum: { $max: [0, workMinutesExpr] } },
+          total_break_minutes: { $sum: breakMinutesExpr() },
           first_punch_in: { $min: '$punch_in' },
           last_punch_out: { $max: '$punch_out' },
         },
@@ -1486,6 +1699,7 @@ const getShopStaffShifts = asyncHandler(async (req, res) => {
           records_count: 1,
           total_actual_minutes: 1,
           total_work_minutes: 1,
+          total_break_minutes: 1,
           first_punch_in: 1,
           last_punch_out: 1,
         },
@@ -1505,6 +1719,7 @@ const getShopStaffShifts = asyncHandler(async (req, res) => {
           _id: null,
           total_actual_minutes: { $sum: { $max: [0, actualMinutesExpr] } },
           total_work_minutes: { $sum: { $max: [0, workMinutesExpr] } },
+          total_break_minutes: { $sum: breakMinutesExpr() },
         },
       },
     ]),
@@ -1513,7 +1728,11 @@ const getShopStaffShifts = asyncHandler(async (req, res) => {
   const aggResult = result[0] || { meta: [], data: [] };
   const total = aggResult.meta?.[0]?.total || 0;
   const userBuckets = aggResult.data || [];
-  const totals = totalsAgg[0] || { total_actual_minutes: 0, total_work_minutes: 0 };
+  const totals = totalsAgg[0] || {
+    total_actual_minutes: 0,
+    total_work_minutes: 0,
+    total_break_minutes: 0,
+  };
 
   let shiftsByUser = new Map();
   if (userBuckets.length > 0) {
@@ -1531,15 +1750,16 @@ const getShopStaffShifts = asyncHandler(async (req, res) => {
         dto.punch_out = record.effective_end;
       }
       const workMinutes = isRootViewer
-        ? minutesBetween(record.punch_in, record.punch_out)
+        ? netMinutesBetween(record.punch_in, record.punch_out, record.breaks)
         : (record.effective_minutes ??
           record.adjusted_minutes ??
-          minutesBetween(record.punch_in, record.punch_out));
+          netMinutesBetween(record.punch_in, record.punch_out, record.breaks));
       dto.work_minutes = Math.max(0, Math.round(workMinutes || 0));
       dto.work_hours = toHours(dto.work_minutes);
       dto.shift_date = record.punch_in
         ? new Date(record.punch_in).toISOString().slice(0, 10)
         : null;
+      Object.assign(dto, buildBreakSummary(record));
 
       const key = String(record.user_id);
       if (!shiftsByUser.has(key)) shiftsByUser.set(key, []);
@@ -1556,6 +1776,8 @@ const getShopStaffShifts = asyncHandler(async (req, res) => {
     total_work_hours: toHours(bucket.total_work_minutes || 0),
     total_actual_minutes: Math.round(bucket.total_actual_minutes || 0),
     total_actual_hours: toHours(bucket.total_actual_minutes || 0),
+    total_break_minutes: Math.round(bucket.total_break_minutes || 0),
+    total_break_hours: toHours(bucket.total_break_minutes || 0),
     first_punch_in: bucket.first_punch_in || null,
     last_punch_out: bucket.last_punch_out || null,
     shifts: shiftsByUser.get(String(bucket.user_id)) || [],
@@ -1572,6 +1794,7 @@ const getShopStaffShifts = asyncHandler(async (req, res) => {
     shift_order: shiftOrder === 1 ? 'asc' : 'desc',
     total_work_hours: toHours(totals.total_work_minutes || 0),
     total_actual_hours: toHours(totals.total_actual_minutes || 0),
+    total_break_hours: toHours(totals.total_break_minutes || 0),
     staff,
   });
 });
@@ -2074,7 +2297,7 @@ const getWeeklyPayrollReport = asyncHandler(async (req, res) => {
         payroll_id: record.user_id.payroll_id || null,
         employee_name: name,
         daysMap: {},
-        weekly_total: { total_before_adj: 0, total_adj: 0, adj_amount: 0 },
+        weekly_total: { total_before_adj: 0, total_adj: 0, adj_amount: 0, total_break_hours: 0 },
       };
       dateStrArray.forEach((d) => {
         employeesMap[uId].daysMap[d] = {
@@ -2083,6 +2306,7 @@ const getWeeklyPayrollReport = asyncHandler(async (req, res) => {
           total_before_adj: 0,
           total_adj: 0,
           adj_amount: 0,
+          total_break_hours: 0,
         };
       });
     }
@@ -2103,7 +2327,10 @@ const getWeeklyPayrollReport = asyncHandler(async (req, res) => {
     if (record.punch_in && record.punch_out) {
       diffMinutes = (new Date(record.punch_out) - new Date(record.punch_in)) / 60000;
     }
+    const breakMinutesForRecord = sumBreakMinutes(record.breaks);
+    diffMinutes = Math.max(0, diffMinutes - breakMinutesForRecord);
     const beforeAdjHours = parseFloat((Math.max(0, diffMinutes) / 60).toFixed(2));
+    const breakHours = parseFloat((breakMinutesForRecord / 60).toFixed(2));
 
     let afterAdjHours = beforeAdjHours;
     if (record.effective_minutes != null) {
@@ -2115,23 +2342,26 @@ const getWeeklyPayrollReport = asyncHandler(async (req, res) => {
     dayData.punches.push({
       time_label: timeLabel,
       hours: afterAdjHours,
+      break_hours: breakHours,
       is_system: record.punch_out_source === 'Auto',
       is_manual: record.is_manual || false,
     });
 
     dayData.total_before_adj += beforeAdjHours;
     dayData.total_adj += afterAdjHours;
+    dayData.total_break_hours += breakHours;
   });
 
   const grand_totals = {
     daysMap: {},
-    weekly_total: { total_before_adj: 0, total_adj: 0, adj_amount: 0 },
+    weekly_total: { total_before_adj: 0, total_adj: 0, adj_amount: 0, total_break_hours: 0 },
   };
   dateStrArray.forEach((d) => {
     grand_totals.daysMap[d] = {
       total_before_adj: 0,
       total_adj: 0,
       adj_amount: 0,
+      total_break_hours: 0,
     };
   });
 
@@ -2142,12 +2372,15 @@ const getWeeklyPayrollReport = asyncHandler(async (req, res) => {
         dayData.total_before_adj = parseFloat(dayData.total_before_adj.toFixed(2));
         dayData.total_adj = parseFloat(dayData.total_adj.toFixed(2));
         dayData.adj_amount = parseFloat((dayData.total_adj - dayData.total_before_adj).toFixed(2));
+        dayData.total_break_hours = parseFloat(dayData.total_break_hours.toFixed(2));
 
         emp.weekly_total.total_before_adj += dayData.total_before_adj;
         emp.weekly_total.total_adj += dayData.total_adj;
+        emp.weekly_total.total_break_hours += dayData.total_break_hours;
 
         grand_totals.daysMap[d].total_before_adj += dayData.total_before_adj;
         grand_totals.daysMap[d].total_adj += dayData.total_adj;
+        grand_totals.daysMap[d].total_break_hours += dayData.total_break_hours;
 
         return dayData;
       });
@@ -2157,12 +2390,18 @@ const getWeeklyPayrollReport = asyncHandler(async (req, res) => {
       emp.weekly_total.adj_amount = parseFloat(
         (emp.weekly_total.total_adj - emp.weekly_total.total_before_adj).toFixed(2)
       );
+      emp.weekly_total.total_break_hours = parseFloat(
+        emp.weekly_total.total_break_hours.toFixed(2)
+      );
 
       grand_totals.weekly_total.total_before_adj += emp.weekly_total.total_before_adj;
       grand_totals.weekly_total.total_adj += emp.weekly_total.total_adj;
+      grand_totals.weekly_total.total_break_hours += emp.weekly_total.total_break_hours;
 
       delete emp.daysMap;
       emp.days = days;
+      // Alias matching the printed report's "Hrs Wrkd" column.
+      emp.hrs_wrkd = emp.weekly_total.total_adj;
       return emp;
     })
     .sort((a, b) => a.employee_name.localeCompare(b.employee_name));
@@ -2171,6 +2410,7 @@ const getWeeklyPayrollReport = asyncHandler(async (req, res) => {
     gd.total_before_adj = parseFloat(gd.total_before_adj.toFixed(2));
     gd.total_adj = parseFloat(gd.total_adj.toFixed(2));
     gd.adj_amount = parseFloat((gd.total_adj - gd.total_before_adj).toFixed(2));
+    gd.total_break_hours = parseFloat(gd.total_break_hours.toFixed(2));
   });
   const grandDays = dateStrArray.map((d) => ({ date: d, ...grand_totals.daysMap[d] }));
 
@@ -2181,17 +2421,34 @@ const getWeeklyPayrollReport = asyncHandler(async (req, res) => {
   grand_totals.weekly_total.adj_amount = parseFloat(
     (grand_totals.weekly_total.total_adj - grand_totals.weekly_total.total_before_adj).toFixed(2)
   );
+  grand_totals.weekly_total.total_break_hours = parseFloat(
+    grand_totals.weekly_total.total_break_hours.toFixed(2)
+  );
 
   return sendSuccess(res, 'Weekly payroll report generated successfully', {
+    report_title: 'Weekly Printed Payroll Report',
     shop: {
       id: shop_id,
       name: shop.name,
+      store_identifier: shop.store_identifier || null,
+      display_name: buildShopReportDisplayName(shop),
     },
     date_range: {
       from: dateStrArray[0],
       to: dateStrArray[dateStrArray.length - 1],
     },
+    week_ending: formatReportDate(end),
+    printed_at: formatReportDateTime(new Date()),
+    legend: {
+      system_punch: '^ Indicates system time punch',
+      manual_punch: '* Indicates a user-edited time punch',
+    },
     dates: dateStrArray,
+    date_headers: dateStrArray.map((d) => ({
+      date: d,
+      date_label: formatDDMMYYYY(d),
+      weekday: reportWeekdayName(d),
+    })),
     employees,
     grand_totals: {
       days: grandDays,
@@ -2204,6 +2461,8 @@ module.exports = {
   verifyLocation,
   punchIn,
   punchOut,
+  breakStart,
+  breakEnd,
   manualPunchIn,
   getAttendance,
   getAttendanceByDateRange,
