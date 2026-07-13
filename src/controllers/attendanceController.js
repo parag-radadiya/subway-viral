@@ -10,6 +10,7 @@ const AppError = require('../utils/AppError');
 const asyncHandler = require('../utils/asyncHandler');
 const { sendSuccess } = require('../utils/response');
 const { parsePagination, toPageMeta } = require('../utils/pagination');
+const { renderPayrollPdf } = require('../utils/payrollPdf');
 const {
   reconcileOverdueAutoPunchOuts,
   reconcileUserOverdueAutoPunchOuts,
@@ -2425,7 +2426,7 @@ const getWeeklyPayrollReport = asyncHandler(async (req, res) => {
     grand_totals.weekly_total.total_break_hours.toFixed(2)
   );
 
-  return sendSuccess(res, 'Weekly payroll report generated successfully', {
+  const reportData = {
     report_title: 'Weekly Printed Payroll Report',
     shop: {
       id: shop_id,
@@ -2454,7 +2455,27 @@ const getWeeklyPayrollReport = asyncHandler(async (req, res) => {
       days: grandDays,
       weekly_total: grand_totals.weekly_total,
     },
-  });
+  };
+
+  // Opt-in PDF output (?format=pdf). Default response stays JSON so existing
+  // consumers are unaffected.
+  if (String(req.query.format || '').toLowerCase() === 'pdf') {
+    const buffer = await renderPayrollPdf(reportData);
+    const safe = (s) =>
+      String(s || '')
+        .replace(/[^a-z0-9]+/gi, '-')
+        .replace(/^-+|-+$/g, '')
+        .toLowerCase();
+    const filename = `weekly-payroll_${safe(shop.name)}_${dateStrArray[0]}_to_${
+      dateStrArray[dateStrArray.length - 1]
+    }.pdf`;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', buffer.length);
+    return res.send(buffer);
+  }
+
+  return sendSuccess(res, 'Weekly payroll report generated successfully', reportData);
 });
 
 module.exports = {
