@@ -5,6 +5,9 @@ async function reconcileOverdueAutoPunchOuts({ userId = null, limit = 200 } = {}
   const filter = {
     punch_out: null,
     auto_punch_out_at: { $ne: null, $lte: now },
+    // Skip records with a lunch break still in progress — matches the manual
+    // punch-out rule that a shift can't be closed while a break is open.
+    breaks: { $not: { $elemMatch: { break_end: null } } },
   };
 
   if (userId) {
@@ -40,13 +43,11 @@ async function reconcileOverdueAutoPunchOuts({ userId = null, limit = 200 } = {}
   // Fire-and-forget notifications for each auto punch-out.
   // Lazy require to avoid circular deps with services that import models.
   if (updated > 0) {
-     
     const notificationService = require('../services/notificationService');
     const User = require('../models/User');
     const Shop = require('../models/Shop');
-     
+
     for (const record of due) {
-       
       const [user, shop] = await Promise.all([
         User.findById(record.user_id).select('name email'),
         Shop.findById(record.shop_id).select('name'),

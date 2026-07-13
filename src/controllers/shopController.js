@@ -130,6 +130,7 @@ const updateShop = asyncHandler(async (req, res) => {
   const nextClosing = normalizeTime(req.body.closing_time);
 
   if (req.body.name !== undefined) shop.name = req.body.name;
+  if (req.body.store_identifier !== undefined) shop.store_identifier = req.body.store_identifier;
   if (req.body.aliases !== undefined) shop.aliases = req.body.aliases;
   if (req.body.latitude !== undefined) shop.latitude = req.body.latitude;
   if (req.body.longitude !== undefined) shop.longitude = req.body.longitude;

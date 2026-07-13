@@ -311,6 +311,239 @@ describe('Attendance module integration', () => {
     expectEnvelope(duplicateRes, 400);
   });
 
+  it('ATT-039: staff can start and end their own lunch break, and it nets out of work hours', async () => {
+    const staffLogin = await login('staff@org.com', 'Staff@1234');
+    const punchIn = new Date(Date.now() - 60 * 60 * 1000);
+    const record = await Attendance.create({
+      user_id: fixtures.users.staffUser._id,
+      shop_id: fixtures.shops.mainShop._id,
+      punch_in: punchIn,
+      is_manual: false,
+      punch_method: 'GPS+Biometric',
+    });
+
+    const startRes = await request(app)
+      .post(`/api/attendance/${record._id}/break-start`)
+      .set('Authorization', `Bearer ${staffLogin.token}`)
+      .send({});
+    expectEnvelope(startRes, 200);
+    expect(startRes.body.data.attendance.breaks).toHaveLength(1);
+    expect(startRes.body.data.attendance.breaks[0].break_end).toBeNull();
+
+    const endRes = await request(app)
+      .put(`/api/attendance/${record._id}/break-end`)
+      .set('Authorization', `Bearer ${staffLogin.token}`)
+      .send({});
+    expectEnvelope(endRes, 200);
+    const closedBreak = endRes.body.data.attendance.breaks[0];
+    expect(closedBreak.break_end).not.toBeNull();
+    expect(closedBreak.duration_minutes).toBeGreaterThanOrEqual(0);
+
+    const punchOutRes = await request(app)
+      .put(`/api/attendance/${record._id}/punch-out`)
+      .set('Authorization', `Bearer ${staffLogin.token}`)
+      .send({});
+    expectEnvelope(punchOutRes, 200);
+  });
+
+  it('ATT-039b: closed break minutes are netted out of reported work hours', async () => {
+    const staffLogin = await login('staff@org.com', 'Staff@1234');
+    const punchIn = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    const punchOut = new Date(Date.now() - 60 * 60 * 1000);
+    const breakStartAt = new Date(punchIn.getTime() + 60 * 60 * 1000);
+    const breakEndAt = new Date(breakStartAt.getTime() + 30 * 60 * 1000);
+
+    await Attendance.create({
+      user_id: fixtures.users.staffUser._id,
+      shop_id: fixtures.shops.mainShop._id,
+      punch_in: punchIn,
+      punch_out: punchOut,
+      is_manual: false,
+      punch_method: 'GPS+Biometric',
+      breaks: [{ break_start: breakStartAt, break_end: breakEndAt, duration_minutes: 30 }],
+    });
+
+    const rangeRes = await request(app)
+      .get('/api/attendance/range')
+      .set('Authorization', `Bearer ${staffLogin.token}`)
+      .query({
+        from_date: punchIn.toISOString().slice(0, 10),
+        to_date: new Date().toISOString().slice(0, 10),
+      });
+    expectEnvelope(rangeRes, 200);
+    // Raw span is 2h; a 30m closed break should net it down to 1.5h.
+    expect(rangeRes.body.data.total_work_hours).toBe(1.5);
+    expect(rangeRes.body.data.total_break_hours).toBe(0.5);
+    const rangeRecord = rangeRes.body.data.records[0];
+    expect(rangeRecord.total_break_minutes).toBe(30);
+    expect(rangeRecord.total_break_hours).toBe(0.5);
+    expect(rangeRecord.breaks_count).toBe(1);
+    expect(rangeRecord.is_on_break).toBe(false);
+
+    const summaryRes = await request(app)
+      .get('/api/attendance/summary-by-user')
+      .set('Authorization', `Bearer ${staffLogin.token}`)
+      .query({
+        from_date: punchIn.toISOString().slice(0, 10),
+        to_date: new Date().toISOString().slice(0, 10),
+      });
+    expectEnvelope(summaryRes, 200);
+    expect(summaryRes.body.data.users[0].total_break_hours).toBe(0.5);
+
+    const shiftsRes = await request(app)
+      .get('/api/attendance/staff-shifts')
+      .set('Authorization', `Bearer ${staffLogin.token}`)
+      .query({
+        shop_id: fixtures.shops.mainShop._id.toString(),
+        from_date: punchIn.toISOString().slice(0, 10),
+        to_date: new Date().toISOString().slice(0, 10),
+      });
+    expectEnvelope(shiftsRes, 200);
+    expect(shiftsRes.body.data.total_break_hours).toBe(0.5);
+    expect(shiftsRes.body.data.staff[0].total_break_hours).toBe(0.5);
+    expect(shiftsRes.body.data.staff[0].shifts[0].total_break_minutes).toBe(30);
+  });
+
+  it('ATT-040: punch-out is blocked while a lunch break is open, and a second break cannot be started', async () => {
+    const staffLogin = await login('staff@org.com', 'Staff@1234');
+    const record = await Attendance.create({
+      user_id: fixtures.users.staffUser._id,
+      shop_id: fixtures.shops.mainShop._id,
+      punch_in: new Date(),
+      is_manual: false,
+      punch_method: 'GPS+Biometric',
+    });
+
+    await request(app)
+      .post(`/api/attendance/${record._id}/break-start`)
+      .set('Authorization', `Bearer ${staffLogin.token}`)
+      .send({});
+
+    const secondBreakRes = await request(app)
+      .post(`/api/attendance/${record._id}/break-start`)
+      .set('Authorization', `Bearer ${staffLogin.token}`)
+      .send({});
+    expectEnvelope(secondBreakRes, 400);
+
+    const blockedPunchOutRes = await request(app)
+      .put(`/api/attendance/${record._id}/punch-out`)
+      .set('Authorization', `Bearer ${staffLogin.token}`)
+      .send({});
+    expectEnvelope(blockedPunchOutRes, 400);
+
+    await request(app)
+      .put(`/api/attendance/${record._id}/break-end`)
+      .set('Authorization', `Bearer ${staffLogin.token}`)
+      .send({});
+
+    const noOpenBreakRes = await request(app)
+      .put(`/api/attendance/${record._id}/break-end`)
+      .set('Authorization', `Bearer ${staffLogin.token}`)
+      .send({});
+    expectEnvelope(noOpenBreakRes, 400);
+
+    const punchOutRes = await request(app)
+      .put(`/api/attendance/${record._id}/punch-out`)
+      .set('Authorization', `Bearer ${staffLogin.token}`)
+      .send({});
+    expectEnvelope(punchOutRes, 200);
+  });
+
+  it('ATT-041: sub-manager with can_manual_punch may manage another staff members break; staff without permission cannot', async () => {
+    const subMgrLogin = await login('submanager@org.com', 'SubMgr@1234');
+    const otherStaffLogin = await login('staff@org.com', 'Staff@1234');
+    const record = await Attendance.create({
+      user_id: fixtures.users.staffUser._id,
+      shop_id: fixtures.shops.mainShop._id,
+      punch_in: new Date(),
+      is_manual: false,
+      punch_method: 'GPS+Biometric',
+    });
+
+    const subMgrStartRes = await request(app)
+      .post(`/api/attendance/${record._id}/break-start`)
+      .set('Authorization', `Bearer ${subMgrLogin.token}`)
+      .send({});
+    expectEnvelope(subMgrStartRes, 200);
+    expect(subMgrStartRes.body.data.attendance.breaks[0].is_manual).toBe(true);
+
+    const subMgrEndRes = await request(app)
+      .put(`/api/attendance/${record._id}/break-end`)
+      .set('Authorization', `Bearer ${subMgrLogin.token}`)
+      .send({});
+    expectEnvelope(subMgrEndRes, 200);
+
+    // Staff (no can_manual_punch permission) cannot manage another user's break.
+    const managerRecord = await Attendance.create({
+      user_id: fixtures.users.managerUser._id,
+      shop_id: fixtures.shops.mainShop._id,
+      punch_in: new Date(),
+      is_manual: false,
+      punch_method: 'GPS+Biometric',
+    });
+    const forbiddenRes = await request(app)
+      .post(`/api/attendance/${managerRecord._id}/break-start`)
+      .set('Authorization', `Bearer ${otherStaffLogin.token}`)
+      .send({});
+    expectEnvelope(forbiddenRes, 403);
+  });
+
+  it('ATT-042: shop_id is optional on staff-shifts and results are scoped to the caller access', async () => {
+    const now = new Date();
+    const fromDate = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const toDate = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+    await Attendance.create({
+      user_id: fixtures.users.staffUser._id,
+      shop_id: fixtures.shops.mainShop._id,
+      punch_in: new Date(now.getTime() - 60 * 60 * 1000),
+      punch_out: now,
+      punch_method: 'GPS+Biometric',
+    });
+    await Attendance.create({
+      user_id: fixtures.users.subManagerUser._id,
+      shop_id: fixtures.shops.eastShop._id,
+      punch_in: new Date(now.getTime() - 60 * 60 * 1000),
+      punch_out: now,
+      punch_method: 'GPS+Biometric',
+    });
+
+    // Manager is assigned to both shops — omitting shop_id should span both.
+    const managerLogin = await login('manager@org.com', 'Manager@1234');
+    const managerRes = await request(app)
+      .get('/api/attendance/staff-shifts')
+      .set('Authorization', `Bearer ${managerLogin.token}`)
+      .query({ from_date: fromDate, to_date: toDate });
+    expectEnvelope(managerRes, 200);
+    const managerUserIds = managerRes.body.data.staff.map((s) => s.user_id);
+    expect(managerUserIds).toEqual(
+      expect.arrayContaining([
+        fixtures.users.staffUser._id.toString(),
+        fixtures.users.subManagerUser._id.toString(),
+      ])
+    );
+
+    // Self-scoped staff sees only their own shifts, regardless of shop, when shop_id is omitted.
+    const staffLogin = await login('staff@org.com', 'Staff@1234');
+    const staffRes = await request(app)
+      .get('/api/attendance/staff-shifts')
+      .set('Authorization', `Bearer ${staffLogin.token}`)
+      .query({ from_date: fromDate, to_date: toDate });
+    expectEnvelope(staffRes, 200);
+    expect(staffRes.body.data.staff.map((s) => s.user_id)).toEqual([
+      fixtures.users.staffUser._id.toString(),
+    ]);
+
+    // Admin sees across all shops when shop_id is omitted.
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+    const adminRes = await request(app)
+      .get('/api/attendance/staff-shifts')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({ from_date: fromDate, to_date: toDate });
+    expectEnvelope(adminRes, 200);
+    expect(adminRes.body.data.staff.length).toBeGreaterThanOrEqual(2);
+  });
+
   it('ATT-015: manual punch returns not found for unknown staff user', async () => {
     const subMgrLogin = await login('submanager@org.com', 'SubMgr@1234');
 
@@ -1183,6 +1416,7 @@ describe('Attendance module integration', () => {
 
   it('ATT-038: weekly-payroll-report returns structured data for PDF generation', async () => {
     const adminLogin = await login('admin@org.com', 'Admin@1234');
+    await Shop.findByIdAndUpdate(fixtures.shops.mainShop._id, { store_identifier: '30324' });
 
     await Attendance.insertMany([
       {
@@ -1191,6 +1425,13 @@ describe('Attendance module integration', () => {
         punch_in: new Date('2026-03-27T09:00:00.000Z'),
         punch_out: new Date('2026-03-27T17:00:00.000Z'),
         punch_method: 'GPS+Biometric',
+        breaks: [
+          {
+            break_start: new Date('2026-03-27T12:00:00.000Z'),
+            break_end: new Date('2026-03-27T12:30:00.000Z'),
+            duration_minutes: 30,
+          },
+        ],
       },
       {
         user_id: fixtures.users.staffUser._id,
@@ -1213,7 +1454,18 @@ describe('Attendance module integration', () => {
 
     expectEnvelope(res, 200);
     expect(res.body.data.shop.name).toBe('Main Branch');
+    expect(res.body.data.shop.store_identifier).toBe('30324');
+    expect(res.body.data.shop.display_name).toBe('Main Branch(30324)');
+    expect(res.body.data.report_title).toBe('Weekly Printed Payroll Report');
+    expect(res.body.data.week_ending).toBe('29 Mar 2026');
+    expect(res.body.data.printed_at).toMatch(/^\d{1,2} \w{3} \d{4} \d{2}:\d{2}$/);
+    expect(res.body.data.legend.system_punch).toMatch(/system time punch/i);
+    expect(res.body.data.legend.manual_punch).toMatch(/user-edited time punch/i);
     expect(res.body.data.dates.length).toBe(7);
+    expect(res.body.data.date_headers).toHaveLength(7);
+    const day27Header = res.body.data.date_headers.find((d) => d.date === '2026-03-27');
+    expect(day27Header.weekday).toBe('Friday');
+    expect(day27Header.date_label).toBe('27/03/2026');
     expect(res.body.data.employees.length).toBeGreaterThanOrEqual(1);
 
     const staffEmp = res.body.data.employees.find(
@@ -1222,10 +1474,14 @@ describe('Attendance module integration', () => {
     expect(staffEmp).toBeTruthy();
     expect(staffEmp.days.length).toBe(7);
 
-    // Day 5 (Mar 27)
+    // Day 5 (Mar 27) — 8h raw span minus a 30m lunch break nets to 7.5h.
     const day27 = staffEmp.days.find((d) => d.date === '2026-03-27');
     expect(day27.punches[0].time_label).toBe('09:00-17:00');
-    expect(day27.total_adj).toBe(8);
+    expect(day27.punches[0].break_hours).toBe(0.5);
+    expect(day27.total_adj).toBe(7.5);
+    expect(day27.total_break_hours).toBe(0.5);
+    expect(staffEmp.weekly_total.total_break_hours).toBe(0.5);
+    expect(staffEmp.hrs_wrkd).toBe(staffEmp.weekly_total.total_adj);
 
     // Day 6 (Mar 28)
     const day28 = staffEmp.days.find((d) => d.date === '2026-03-28');
@@ -1235,6 +1491,6 @@ describe('Attendance module integration', () => {
     // Grand Totals check
     expect(
       res.body.data.grand_totals.days.find((d) => d.date === '2026-03-27').total_adj
-    ).toBeGreaterThanOrEqual(8);
+    ).toBeGreaterThanOrEqual(7.5);
   });
 });

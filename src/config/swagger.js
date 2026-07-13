@@ -105,6 +105,12 @@ const options = {
           properties: {
             _id: { type: 'string' },
             name: { type: 'string', example: 'Main Branch' },
+            store_identifier: {
+              type: 'string',
+              nullable: true,
+              example: '30324',
+              description: 'Printed on reports as "Name(store_identifier)".',
+            },
             latitude: { type: 'number', example: 51.5074 },
             longitude: { type: 'number', example: -0.1278 },
             geofence_radius_m: { type: 'number', example: 150 },
@@ -119,6 +125,7 @@ const options = {
           required: ['name', 'latitude', 'longitude'],
           properties: {
             name: { type: 'string' },
+            store_identifier: { type: 'string', nullable: true, example: '30324' },
             latitude: { type: 'number' },
             longitude: { type: 'number' },
             geofence_radius_m: { type: 'number', default: 100 },
