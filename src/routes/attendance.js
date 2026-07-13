@@ -723,9 +723,29 @@ router.get('/', protect, getAttendance);
  *         schema:
  *           type: string
  *           format: date
+ *       - in: query
+ *         name: format
+ *         required: false
+ *         schema:
+ *           type: string
+ *           enum: [json, pdf]
+ *         description: >-
+ *           Response format. Omit (or `json`) for the structured JSON payload.
+ *           Pass `pdf` to download a rendered "Weekly Printed Payroll Report" PDF
+ *           (Content-Type application/pdf, attachment).
  *     responses:
  *       200:
- *         description: Structured payroll report matching the PDF layout
+ *         description: >-
+ *           Structured payroll report matching the PDF layout (JSON), or the
+ *           rendered PDF file when `format=pdf`.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *           application/pdf:
+ *             schema:
+ *               type: string
+ *               format: binary
  */
 router.get(
   '/weekly-payroll-report',
