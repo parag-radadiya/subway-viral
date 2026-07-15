@@ -442,64 +442,79 @@ function mergeIntervals(intervals) {
   return merged;
 }
 
-function buildBulkRegeneratedIntervals({ windows, userIds, targetMinutesByUser }) {
+// Default shift-length limits for bulk-by-shop regeneration (overridable per
+// request). A single generated shift must be >= min and <= max hours, so a
+// large target is split into several shifts across days rather than one
+// unrealistic 14–22h block.
+const DEFAULT_BULK_MIN_SHIFT_MINUTES = 240; // 4h
+const DEFAULT_BULK_MAX_SHIFT_MINUTES = 600; // 10h
+
+// Allocate non-overlapping shifts across the shop's open windows, honouring
+// min/max shift length and "at most one shift per user per open window".
+//
+// Invariants held:
+//  - every emitted shift is within [minMinutes, maxMinutes]
+//  - a user never has two overlapping shifts (single presence at a time)
+//  - each open window is single-staffed (one user per instant)
+//  - a user gets at most one shift per open window; targets larger than max
+//    spill to later windows/days (multiple shifts)
+//
+// Anything that cannot be placed is surfaced (not silently overlapped):
+//  - `gaps`: open-window time no eligible user could cover under the limits
+//  - `leftoverByUser`: target minutes that did not fit in the available windows
+function allocateBulkShiftsWithLimits({ windows, userIds, targetMinutesByUser, minMinutes, maxMinutes }) {
   const allocationsByUser = new Map(userIds.map((userId) => [userId, []]));
-  const remainingMinutesByUser = new Map(
+  const remaining = new Map(
     userIds.map((userId) => [userId, Math.max(0, Number(targetMinutesByUser.get(userId)) || 0)])
   );
-
   const gaps = [];
-  windows.forEach((window) => {
+
+  for (const window of windows) {
     let cursor = new Date(window.start);
     const windowEnd = new Date(window.end);
+    const usedInWindow = new Set();
 
     while (cursor < windowEnd) {
-      const selectedUser = pickUserWithMostRemaining(userIds, remainingMinutesByUser);
-      if (!selectedUser) {
-        gaps.push({ start: new Date(cursor), end: windowEnd });
+      const windowRem = minutesFromRange(cursor, windowEnd);
+      // Remaining slice too short to host a valid (>= min) shift.
+      if (windowRem < minMinutes) {
+        gaps.push({ start: new Date(cursor), end: new Date(windowEnd) });
         break;
       }
 
-      const available = Math.max(0, Number(remainingMinutesByUser.get(selectedUser)) || 0);
-      const needed = minutesFromRange(cursor, windowEnd);
-      const allocated = Math.min(available, needed);
-      if (allocated <= 0) {
-        gaps.push({ start: new Date(cursor), end: windowEnd });
+      const eligible = userIds.filter(
+        (userId) =>
+          !usedInWindow.has(userId) && Math.max(0, Number(remaining.get(userId)) || 0) >= minMinutes
+      );
+      if (eligible.length === 0) {
+        gaps.push({ start: new Date(cursor), end: new Date(windowEnd) });
         break;
       }
 
-      const segmentEnd = new Date(cursor.getTime() + allocated * 60000);
-      allocationsByUser.get(selectedUser).push({ start: new Date(cursor), end: segmentEnd });
-      remainingMinutesByUser.set(selectedUser, available - allocated);
+      const user = pickUserWithMostRemaining(eligible, remaining);
+      const available = Math.max(0, Number(remaining.get(user)) || 0);
+      let chunk = Math.min(available, maxMinutes, windowRem);
+
+      // If the slice we'd leave behind is smaller than a full shift, extend the
+      // current shift to swallow it when that stays within max and the user's
+      // remaining — avoids stranding a sub-min tail.
+      const tail = windowRem - chunk;
+      if (tail > 0 && tail < minMinutes) {
+        chunk += Math.max(0, Math.min(maxMinutes - chunk, available - chunk, tail));
+      }
+
+      const segmentEnd = new Date(cursor.getTime() + chunk * 60000);
+      allocationsByUser.get(user).push({ start: new Date(cursor), end: segmentEnd });
+      remaining.set(user, available - chunk);
+      usedInWindow.add(user);
       cursor = segmentEnd;
     }
-  });
+  }
 
-  userIds.forEach((userId) => {
-    let remaining = Math.max(0, Number(remainingMinutesByUser.get(userId)) || 0);
-    if (remaining <= 0) return;
-
-    while (remaining > 0) {
-      const beforePass = remaining;
-      for (const window of windows) {
-        if (remaining <= 0) break;
-        const windowMinutes = minutesFromRange(window.start, window.end);
-        if (windowMinutes <= 0) continue;
-
-        const allocated = Math.min(windowMinutes, remaining);
-        const segmentStart = new Date(window.start);
-        const segmentEnd = new Date(segmentStart.getTime() + allocated * 60000);
-        allocationsByUser.get(userId).push({ start: segmentStart, end: segmentEnd });
-        remaining -= allocated;
-      }
-
-      if (remaining === beforePass) break;
-    }
-
-    remainingMinutesByUser.set(userId, remaining);
-  });
-
-  return { allocationsByUser, remainingMinutesByUser, gaps };
+  const leftoverByUser = new Map(
+    userIds.map((userId) => [userId, Math.max(0, Number(remaining.get(userId)) || 0)])
+  );
+  return { allocationsByUser, gaps, leftoverByUser };
 }
 
 async function assertShopHasContinuousCoverage({
@@ -2001,7 +2016,12 @@ const getUnchangedUsersForRange = asyncHandler(async (req, res) => {
   });
 });
 
-const bulkAdjustClosedAttendanceByShop = asyncHandler(async (req, res) => {
+// Shared validation + allocation for bulk-by-shop adjustment. Structural
+// problems (bad input, unknown/foreign users, invalid limits) throw 400/404.
+// "Business" problems (unselected users, coverage shortfall, gaps, hours that
+// won't fit under the shift limits) are collected into `issues` and `feasible`
+// so Preview can report them and Apply can 409 on them.
+async function buildBulkAdjustmentPlan(req) {
   const { shop_id, from_date, to_date, adjustments, note = null } = req.body;
   if (
     !shop_id ||
@@ -2021,6 +2041,27 @@ const bulkAdjustClosedAttendanceByShop = asyncHandler(async (req, res) => {
   }
   if (rangeEnd < rangeStart) {
     throw new AppError('to_date must be greater than or equal to from_date', 400);
+  }
+
+  // Per-request shift-length limits, defaulting to 4h/10h.
+  const minMinutes =
+    req.body.min_shift_hours !== undefined
+      ? Math.round(Number(req.body.min_shift_hours) * 60)
+      : DEFAULT_BULK_MIN_SHIFT_MINUTES;
+  const maxMinutes =
+    req.body.max_shift_hours !== undefined
+      ? Math.round(Number(req.body.max_shift_hours) * 60)
+      : DEFAULT_BULK_MAX_SHIFT_MINUTES;
+  if (
+    !Number.isFinite(minMinutes) ||
+    !Number.isFinite(maxMinutes) ||
+    minMinutes <= 0 ||
+    maxMinutes <= 0
+  ) {
+    throw new AppError('min_shift_hours and max_shift_hours must be positive numbers', 400);
+  }
+  if (minMinutes > maxMinutes) {
+    throw new AppError('min_shift_hours must be less than or equal to max_shift_hours', 400);
   }
 
   const shop = await Shop.findById(shop_id).select(
@@ -2074,77 +2115,198 @@ const bulkAdjustClosedAttendanceByShop = asyncHandler(async (req, res) => {
     fromDate: rangeStart,
     toDate: rangeEnd,
   });
-
   const selectedUsersSet = new Set(selectedUserIds.map((id) => String(id)));
   const unchangedUsers = usersInRange.filter((user) => !selectedUsersSet.has(String(user.user_id)));
-  if (unchangedUsers.length > 0) {
-    throw new AppError(
-      'Some users in this shop/date range are not selected. Include all users or adjust your date range.',
-      409,
-      {
-        unchanged_users: unchangedUsers,
-      }
-    );
-  }
 
   const { windows, requiredCoverageMinutes } = buildShopCoverageWindows(shop, rangeStart, rangeEnd);
   if (windows.length === 0) {
     throw new AppError('No shop open-time windows found inside the selected date range', 400);
   }
 
-  const totalAdjustedMinutes = selectedUserIds.reduce(
+  const totalTargetMinutes = selectedUserIds.reduce(
     (sum, userId) => sum + Math.max(0, Number(targetMinutesByUser.get(userId)) || 0),
     0
   );
 
-  if (totalAdjustedMinutes < requiredCoverageMinutes) {
-    throw new AppError(
-      'Coverage check failed: total target hours are below required shop open coverage',
-      409,
-      {
-        error_code: 'INSUFFICIENT_TARGET_HOURS_FOR_COVERAGE',
-        shop_id,
-        range_start: rangeStart.toISOString(),
-        range_end: rangeEnd.toISOString(),
-        required_coverage_hours: toHours(requiredCoverageMinutes),
-        requested_target_hours_total: toHours(totalAdjustedMinutes),
-        missing_hours: toHours(requiredCoverageMinutes - totalAdjustedMinutes),
-      }
-    );
-  }
-
-  const { allocationsByUser, gaps } = buildBulkRegeneratedIntervals({
+  const { allocationsByUser, gaps, leftoverByUser } = allocateBulkShiftsWithLimits({
     windows,
     userIds: selectedUserIds,
     targetMinutesByUser,
+    minMinutes,
+    maxMinutes,
   });
 
-  if (gaps.length > 0) {
-    const formattedGaps = gaps.map(formatGap);
-    const totalMissingMinutes = formattedGaps.reduce((sum, gap) => sum + (gap.minutes || 0), 0);
-    throw new AppError(
-      'Coverage check failed: adjustment leaves shop open-time gaps without staff',
-      409,
-      {
-        error_code: 'COVERAGE_GAP_AFTER_ADJUSTMENT',
+  const formattedGaps = gaps.map(formatGap);
+  const totalMissingMinutes = formattedGaps.reduce((sum, gap) => sum + (gap.minutes || 0), 0);
+  const leftoverUsers = selectedUserIds
+    .filter((userId) => (Number(leftoverByUser.get(userId)) || 0) > 0)
+    .map((userId) => ({
+      user_id: userId,
+      unallocated_hours: toHours(Number(leftoverByUser.get(userId)) || 0),
+    }));
+
+  // Blocking issues reject Apply with 409 (these are the SAME conditions the
+  // endpoint rejected before this change, so the current frontend flow is
+  // unaffected). Warnings never fail the request — they are surfaced in the
+  // 200 response so the UI can optionally show them.
+  const blockingIssues = [];
+  const warnings = [];
+
+  if (unchangedUsers.length > 0) {
+    blockingIssues.push({
+      error_code: 'UNSELECTED_USERS_IN_RANGE',
+      message:
+        'Some users in this shop/date range are not selected. Include all users or adjust your date range.',
+      detail: { unchanged_users: unchangedUsers },
+    });
+  }
+  if (totalTargetMinutes < requiredCoverageMinutes) {
+    blockingIssues.push({
+      error_code: 'INSUFFICIENT_TARGET_HOURS_FOR_COVERAGE',
+      message: 'Coverage check failed: total target hours are below required shop open coverage',
+      detail: {
+        shop_id: normalizeId(shop_id),
+        required_coverage_hours: toHours(requiredCoverageMinutes),
+        requested_target_hours_total: toHours(totalTargetMinutes),
+        missing_hours: toHours(requiredCoverageMinutes - totalTargetMinutes),
+      },
+    });
+  }
+  if (formattedGaps.length > 0) {
+    warnings.push({
+      error_code: 'COVERAGE_GAP_AFTER_ADJUSTMENT',
+      message:
+        'Some shop open-time could not be staffed under the min/max shift limits (applied with gaps)',
+      detail: {
         shop_id: normalizeId(shop_id),
         shop_name: shop.name,
-        range_start: rangeStart.toISOString(),
-        range_end: rangeEnd.toISOString(),
         required_coverage_hours: toHours(requiredCoverageMinutes),
         achievable_coverage_hours_after_adjustment: toHours(
           requiredCoverageMinutes - totalMissingMinutes
         ),
-        expected_missing_if_even_distribution_hours: 0,
         total_missing_minutes: totalMissingMinutes,
         total_missing_hours: toHours(totalMissingMinutes),
         gaps_count: formattedGaps.length,
         gaps: formattedGaps.slice(0, 10),
         uncovered_windows_preview: formattedGaps.slice(0, 3).map(formatGapLabel),
-      }
-    );
+      },
+    });
+  }
+  if (leftoverUsers.length > 0) {
+    warnings.push({
+      error_code: 'UNALLOCATED_TARGET_HOURS',
+      message:
+        'Some target hours could not be placed within shop open hours under the min/max shift limits',
+      detail: { users: leftoverUsers },
+    });
   }
 
+  return {
+    shop,
+    shopId: shop_id,
+    rangeStart,
+    rangeEnd,
+    note,
+    minMinutes,
+    maxMinutes,
+    selectedUserIds,
+    targetMinutesByUser,
+    requiredCoverageMinutes,
+    totalTargetMinutes,
+    allocationsByUser,
+    leftoverByUser,
+    formattedGaps,
+    blockingIssues,
+    warnings,
+    canApply: blockingIssues.length === 0,
+  };
+}
+
+// Shared per-user shift breakdown + totals used by both Preview and Apply.
+// The shape is a strict SUPERSET of the pre-change response (legacy keys
+// `totals.regenerated_hours` and `users[].regenerated_records_count` are kept)
+// so the existing frontend needs no changes.
+function buildBulkPlanResponse(plan) {
+  const users = plan.selectedUserIds.map((userId) => {
+    const merged = mergeIntervals(plan.allocationsByUser.get(userId) || []);
+    const allocatedMinutes = merged.reduce(
+      (sum, interval) => sum + minutesFromRange(interval.start, interval.end),
+      0
+    );
+    return {
+      user_id: userId,
+      target_hours: toHours(plan.targetMinutesByUser.get(userId) || 0),
+      allocated_hours: toHours(allocatedMinutes),
+      unallocated_hours: toHours(Number(plan.leftoverByUser.get(userId)) || 0),
+      shift_count: merged.length,
+      // legacy alias (old key name)
+      regenerated_records_count: merged.length,
+      shifts: merged.map((interval) => ({
+        punch_in: interval.start.toISOString(),
+        punch_out: interval.end.toISOString(),
+        hours: toHours(minutesFromRange(interval.start, interval.end)),
+      })),
+    };
+  });
+
+  const allocatedTotal = users.reduce((sum, u) => sum + Math.round((u.allocated_hours || 0) * 60), 0);
+
+  return {
+    shop_id: normalizeId(plan.shopId),
+    shop_name: plan.shop.name,
+    from_date: plan.rangeStart.toISOString(),
+    to_date: plan.rangeEnd.toISOString(),
+    users_count: plan.selectedUserIds.length,
+    coverage_rebalanced: true,
+    limits: {
+      min_shift_hours: toHours(plan.minMinutes),
+      max_shift_hours: toHours(plan.maxMinutes),
+    },
+    totals: {
+      required_coverage_hours: toHours(plan.requiredCoverageMinutes),
+      target_hours: toHours(plan.totalTargetMinutes),
+      allocated_hours: toHours(allocatedTotal),
+      // legacy alias (old key name)
+      regenerated_hours: toHours(allocatedTotal),
+    },
+    // New, additive informational fields:
+    can_apply: plan.canApply,
+    blocking_issues: plan.blockingIssues,
+    warnings: plan.warnings,
+    has_gaps: plan.formattedGaps.length > 0,
+    gaps: plan.formattedGaps.slice(0, 20),
+    users,
+  };
+}
+
+// POST /api/attendance/adjust-hours/bulk-by-shop/preview — dry run, no writes.
+const previewBulkAdjustClosedAttendanceByShop = asyncHandler(async (req, res) => {
+  const plan = await buildBulkAdjustmentPlan(req);
+  return sendSuccess(res, 'Bulk attendance adjustment preview generated', {
+    ...buildBulkPlanResponse(plan),
+    preview: true,
+  });
+});
+
+const bulkAdjustClosedAttendanceByShop = asyncHandler(async (req, res) => {
+  const plan = await buildBulkAdjustmentPlan(req);
+
+  // Only the pre-existing conditions (unselected users, total hours below
+  // coverage) reject the request — same 409 behavior as before. Coverage gaps
+  // or unallocatable hours introduced purely by the min/max limits are applied
+  // and reported as warnings, so the current frontend flow still gets 200.
+  if (!plan.canApply) {
+    const primary = plan.blockingIssues[0];
+    throw new AppError(primary.message, 409, {
+      error_code: primary.error_code,
+      ...primary.detail,
+      can_apply: false,
+      blocking_issues: plan.blockingIssues,
+      warnings: plan.warnings,
+    });
+  }
+
+  const { shopId, rangeStart, rangeEnd, selectedUserIds, allocationsByUser, note } = plan;
   const batchId = randomUUID();
   const now = new Date();
   const docsToInsert = [];
@@ -2154,10 +2316,9 @@ const bulkAdjustClosedAttendanceByShop = asyncHandler(async (req, res) => {
     merged.forEach((interval) => {
       const mins = minutesFromRange(interval.start, interval.end);
       if (mins <= 0) return;
-
       docsToInsert.push({
         user_id: userId,
-        shop_id,
+        shop_id: shopId,
         punch_in: interval.start,
         punch_out: interval.end,
         punch_out_source: 'Manual',
@@ -2187,7 +2348,7 @@ const bulkAdjustClosedAttendanceByShop = asyncHandler(async (req, res) => {
 
   await Attendance.updateMany(
     {
-      shop_id,
+      shop_id: shopId,
       user_id: { $in: selectedUserIds },
       is_active: { $ne: false },
       punch_out: { $ne: null },
@@ -2209,31 +2370,15 @@ const bulkAdjustClosedAttendanceByShop = asyncHandler(async (req, res) => {
   notificationService.notifyAttendanceAdjusted({
     batchId,
     performer: req.user,
-    shopId: shop_id,
-    shopName: shop.name,
+    shopId,
+    shopName: plan.shop.name,
     affectedCount: selectedUserIds.length,
   });
 
   return sendSuccess(res, 'Bulk attendance hours adjustment applied successfully', {
-    shop_id,
-    shop_name: shop.name,
-    from_date: rangeStart.toISOString(),
-    to_date: rangeEnd.toISOString(),
-    users_count: selectedUserIds.length,
+    ...buildBulkPlanResponse(plan),
+    applied: true,
     batch_id: batchId,
-    totals: {
-      required_coverage_hours: toHours(requiredCoverageMinutes),
-      target_hours: toHours(totalAdjustedMinutes),
-      regenerated_hours: toHours(
-        docsToInsert.reduce((sum, doc) => sum + Math.max(0, Number(doc.effective_minutes) || 0), 0)
-      ),
-    },
-    coverage_rebalanced: true,
-    users: selectedUserIds.map((userId) => ({
-      user_id: userId,
-      target_hours: toHours(targetMinutesByUser.get(userId) || 0),
-      regenerated_records_count: mergeIntervals(allocationsByUser.get(userId) || []).length,
-    })),
   });
 });
 
@@ -2501,6 +2646,7 @@ module.exports = {
   previewClosedAttendanceAdjustment,
   applyClosedAttendanceAdjustment,
   bulkAdjustClosedAttendanceByShop,
+  previewBulkAdjustClosedAttendanceByShop,
   getUnchangedUsersForRange,
   getWeeklyPayrollReport,
 };
