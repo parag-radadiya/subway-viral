@@ -33,6 +33,18 @@ async function issueAuthTokens(userDoc) {
   return { accessToken, refreshToken, refreshTokenExpiresAt: expiresAt };
 }
 
+function buildUserResponse(user) {
+  return {
+    id: user._id,
+    name: user.name,
+    email: user.email,
+    role: user.role_id,
+    active_shop_id: user.active_shop_id || user.shop_id || null,
+    shop_id: user.shop_id,
+    assigned_shop_ids: user.assigned_shop_ids || [],
+  };
+}
+
 function buildLoginPayload(user, tokens) {
   return {
     token: tokens.accessToken,
@@ -41,15 +53,7 @@ function buildLoginPayload(user, tokens) {
     refresh_token_expires_at: tokens.refreshTokenExpiresAt,
     must_change_password: user.must_change_password,
     needs_device_registration: !user.device_id,
-    user: {
-      id: user._id,
-      name: user.name,
-      email: user.email,
-      role: user.role_id,
-      active_shop_id: user.active_shop_id || user.shop_id || null,
-      shop_id: user.shop_id,
-      assigned_shop_ids: user.assigned_shop_ids || [],
-    },
+    user: buildUserResponse(user),
   };
 }
 
@@ -150,4 +154,14 @@ const logout = asyncHandler(async (req, res) => {
   return sendSuccess(res, 'Logged out successfully', {});
 });
 
-module.exports = { login, refreshAccessToken, logout };
+// @route  GET /api/auth/me
+// @access Private (Bearer token)
+// Returns the current user in the same shape as the `user` object in the
+// login response, resolved from the token.
+const getMe = asyncHandler(async (req, res) => {
+  return sendSuccess(res, 'Current user fetched successfully', {
+    user: buildUserResponse(req.user),
+  });
+});
+
+module.exports = { login, refreshAccessToken, logout, getMe };

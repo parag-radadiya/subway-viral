@@ -1,7 +1,8 @@
 const express = require('express');
 const router = express.Router();
-const { login, refreshAccessToken, logout } = require('../controllers/authController');
+const { login, refreshAccessToken, logout, getMe } = require('../controllers/authController');
 const { loginRateLimiter } = require('../middleware/loginRateLimitMiddleware');
+const { protect } = require('../middleware/authMiddleware');
 
 /**
  * @swagger
@@ -44,6 +45,25 @@ const { loginRateLimiter } = require('../middleware/loginRateLimitMiddleware');
  *               $ref: '#/components/schemas/ErrorResponse'
  */
 router.post('/login', loginRateLimiter, login);
+
+/**
+ * @swagger
+ * /api/auth/me:
+ *   get:
+ *     summary: Get the current authenticated user (resolved from the Bearer token)
+ *     tags: [Auth]
+ *     description: >-
+ *       Returns the same `user` object shape as the login response (id, name,
+ *       email, populated role, active_shop_id, shop_id, assigned_shop_ids).
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Current user
+ *       401:
+ *         description: Missing or invalid token
+ */
+router.get('/me', protect, getMe);
 
 /**
  * @swagger
