@@ -854,7 +854,9 @@ describe('Attendance module integration', () => {
       .send({
         shop_id: fixtures.shops.mainShop._id.toString(),
         from_date: '2026-03-18',
-        to_date: '2026-03-18',
+        // 4-day range so the shop's 4h/day window (10:00–14:00) can host both
+        // targets as 4h shifts under the new min/max limits.
+        to_date: '2026-03-21',
         adjustments: [
           {
             user_id: fixtures.users.staffUser._id.toString(),
@@ -862,7 +864,7 @@ describe('Attendance module integration', () => {
           },
           {
             user_id: extraStaff._id.toString(),
-            target_hours: 6,
+            target_hours: 8,
           },
         ],
       });
@@ -888,7 +890,7 @@ describe('Attendance module integration', () => {
     expect(adjusted.length).toBeGreaterThanOrEqual(2);
     const targetByUser = {
       [fixtures.users.staffUser._id.toString()]: 480,
-      [extraStaff._id.toString()]: 360,
+      [extraStaff._id.toString()]: 480,
     };
 
     const totalsByUser = adjusted.reduce((acc, record) => {

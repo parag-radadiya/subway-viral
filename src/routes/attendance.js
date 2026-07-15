@@ -17,6 +17,7 @@ const {
   previewClosedAttendanceAdjustment,
   applyClosedAttendanceAdjustment,
   bulkAdjustClosedAttendanceByShop,
+  previewBulkAdjustClosedAttendanceByShop,
   getUnchangedUsersForRange,
   getWeeklyPayrollReport,
 } = require('../controllers/attendanceController');
@@ -212,17 +213,51 @@ router.post(
 
 /**
  * @swagger
+ * /api/attendance/adjust-hours/bulk-by-shop/preview:
+ *   post:
+ *     summary: Preview a bulk-by-shop adjustment (no writes) — shows the proposed shift split, gaps and feasibility
+ *     tags: [Attendance]
+ *     description: |
+ *       Same request body as `bulk-by-shop`. Returns the regenerated shifts each
+ *       user would get under the min/max shift limits without writing anything.
+ *       Optional body fields `min_shift_hours` (default 4) and `max_shift_hours`
+ *       (default 10) bound each generated shift; long targets are split into
+ *       multiple shifts across days. Response includes `feasible`, `issues[]`,
+ *       `gaps[]`, and per-user `unallocated_hours`.
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Preview with proposed shifts, gaps and feasibility
+ */
+router.post(
+  '/adjust-hours/bulk-by-shop/preview',
+  protect,
+  requirePermission('can_adjust_attendance_hours'),
+  previewBulkAdjustClosedAttendanceByShop
+);
+
+/**
+ * @swagger
  * /api/attendance/adjust-hours/bulk-by-shop:
  *   post:
  *     summary: Bulk-apply effective-hours adjustments for selected users in one shop/date range
  *     tags: [Attendance]
+ *     description: |
+ *       Regenerates attendance for the selected users so each user's total matches
+ *       their `target_hours`, split into shifts of `min_shift_hours`..`max_shift_hours`
+ *       (defaults 4h/10h, overridable in the body). One shift per user per open
+ *       window; targets larger than the max spill to later days. Returns `409`
+ *       with `issues[]` (and legacy `error_code`) when coverage cannot be met
+ *       under the limits — call the `/preview` endpoint first to inspect.
  *     security:
  *       - BearerAuth: []
  *     responses:
  *       200:
  *         description: Bulk adjustment applied
+ *       409:
+ *         description: Not feasible under the shift limits (coverage gaps / unselected users / unallocatable hours)
  */
-
 router.post(
   '/adjust-hours/bulk-by-shop',
   protect,
