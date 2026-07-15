@@ -105,6 +105,27 @@ describe('Weekly payroll report — PDF output', () => {
     expect(res.body.data.dates).toHaveLength(7);
   });
 
+  it('includes the populated user name and email per employee', async () => {
+    const res = await request(app)
+      .get('/api/attendance/weekly-payroll-report')
+      .query({ shop_id: shopId, from_date: FROM, to_date: TO })
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    const emp = res.body.data.employees.find(
+      (e) => String(e.user_id) === String(fixtures.users.staffUser._id)
+    );
+    expect(emp).toBeDefined();
+    expect(emp.name).toBe('Dave Staff');
+    expect(emp.employee_name).toBe('Dave Staff');
+    expect(emp.email).toBe('staff@org.com');
+    expect(emp.user).toEqual({
+      id: String(fixtures.users.staffUser._id),
+      name: 'Dave Staff',
+      email: 'staff@org.com',
+    });
+  });
+
   it('PDF path still enforces required params (missing shop_id → 400)', async () => {
     const res = await request(app)
       .get('/api/attendance/weekly-payroll-report')

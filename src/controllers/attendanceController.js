@@ -2274,7 +2274,7 @@ const getWeeklyPayrollReport = asyncHandler(async (req, res) => {
   };
 
   const records = await Attendance.find(query)
-    .populate('user_id', 'first_name last_name payroll_id')
+    .populate('user_id', 'name email first_name last_name payroll_id')
     .sort({ punch_in: 1 })
     .lean();
 
@@ -2292,11 +2292,17 @@ const getWeeklyPayrollReport = asyncHandler(async (req, res) => {
     if (!record.user_id) return;
     const uId = String(record.user_id._id);
     if (!employeesMap[uId]) {
-      const name = `${record.user_id.first_name || ''} ${record.user_id.last_name || ''}`.trim();
+      const name =
+        record.user_id.name ||
+        `${record.user_id.first_name || ''} ${record.user_id.last_name || ''}`.trim();
+      const email = record.user_id.email || null;
       employeesMap[uId] = {
         user_id: uId,
         payroll_id: record.user_id.payroll_id || null,
         employee_name: name,
+        name,
+        email,
+        user: { id: uId, name, email },
         daysMap: {},
         weekly_total: { total_before_adj: 0, total_adj: 0, adj_amount: 0, total_break_hours: 0 },
       };
