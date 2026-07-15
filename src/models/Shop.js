@@ -65,6 +65,19 @@ const shopSchema = new mongoose.Schema(
       default: DEFAULT_MAX_SHIFT_DURATION_HOURS,
       min: [0.25, 'max_shift_duration_hours must be at least 0.25 hours'],
     },
+    is_active: {
+      type: Boolean,
+      default: true,
+      // false = shop is closed/inactive. Additive flag; list endpoints are not
+      // filtered by it (callers decide how to use it).
+    },
+    is_all_shops: {
+      type: Boolean,
+      default: false,
+      // true only for the special "All Shops" aggregate record (sum of all
+      // shops). Lets clients identify/exclude it via the field instead of query
+      // params or name matching.
+    },
     shop_time_history: [
       {
         opening_time: {
