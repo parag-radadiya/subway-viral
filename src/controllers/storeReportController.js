@@ -1328,12 +1328,24 @@ function normalizeMetricAlias(key) {
 function readMetric(metrics, aliases, fallback = 0) {
   if (!metrics || typeof metrics !== 'object') return fallback;
 
+  const numericEntries = Object.entries(metrics).filter(
+    ([, value]) => typeof value === 'number' && Number.isFinite(value)
+  );
+
+  // A percentage-labelled key like "Labour cost %" normalizes to the SAME token
+  // ("labourcost") as the amount key "LABOUR COST", because "%" and spaces are
+  // stripped. Insert amount keys first so a ratio (e.g. 0.21) can never clobber
+  // the real amount (e.g. 4966.05) — which previously made labour/food/vat %
+  // metrics collapse to ~0.
   const numericLookup = new Map();
-  Object.entries(metrics).forEach(([key, value]) => {
-    if (typeof value === 'number' && Number.isFinite(value)) {
-      numericLookup.set(normalizeMetricAlias(key), value);
-    }
-  });
+  const isPercentKey = (key) => /%|percent/i.test(key);
+  for (const [key, value] of numericEntries) {
+    if (!isPercentKey(key)) numericLookup.set(normalizeMetricAlias(key), value);
+  }
+  for (const [key, value] of numericEntries) {
+    const nk = normalizeMetricAlias(key);
+    if (!numericLookup.has(nk)) numericLookup.set(nk, value);
+  }
 
   for (let i = 0; i < aliases.length; i += 1) {
     const value = numericLookup.get(normalizeMetricAlias(aliases[i]));
@@ -2512,6 +2524,7 @@ const getStoreReportDashboardAnalytics = asyncHandler(async (req, res) => {
     report_type: reportType,
     view,
     compare,
+    ...buildDataAvailability(rowsInWindow.length, reportType),
     filters: {
       year: req.query.year ? Number(req.query.year) : null,
       month: req.query.month ? Number(req.query.month) : null,
@@ -3463,6 +3476,18 @@ function referenceIdsFromRecords(records) {
   return records.map((r) => String(r._id));
 }
 
+// Standard "is there any data for the selected period" flags for financial
+// dashboards. `has_data:false` + a human-readable `data_warning` let the
+// frontend show e.g. "This week has no data" instead of rendering all-zero KPIs.
+function buildDataAvailability(recordCount, reportType) {
+  const hasData = Number(recordCount) > 0;
+  const period = reportType === 'monthly_store_kpi' ? 'month' : 'week';
+  return {
+    has_data: hasData,
+    data_warning: hasData ? null : `No financial data found for the selected ${period}.`,
+  };
+}
+
 // GET /api/store-reports/analytics/v2/kpi-matrix
 // Full financial KPI breakdown for selected period — total + per shop + optional compare period
 const getAnalyticsV2KpiMatrix = asyncHandler(async (req, res) => {
@@ -3517,6 +3542,7 @@ const getAnalyticsV2KpiMatrix = asyncHandler(async (req, res) => {
     compare_period:
       compare_from || compare_to ? { from: compare_from || null, to: compare_to || null } : null,
     report_type: report_type === 'monthly_store_kpi' ? 'monthly_store_kpi' : 'weekly_financial',
+    ...buildDataAvailability(current.length, report_type),
     total: {
       current: currentTotal,
       compare: compareTotal,
@@ -3581,6 +3607,7 @@ const getAnalyticsV2ShopCompare = asyncHandler(async (req, res) => {
   return sendSuccess(res, 'Shop comparison fetched successfully', {
     period: { from: from_date || null, to: to_date || null },
     report_type: report_type === 'monthly_store_kpi' ? 'monthly_store_kpi' : 'weekly_financial',
+    ...buildDataAvailability(records.length, report_type),
     shops: shopSummaries.map((s) => ({
       shopId: s.shopId,
       shopName: s.shopName,
@@ -3655,17 +3682,20 @@ const getAnalyticsV2PeriodCompare = asyncHandler(async (req, res) => {
   shopData.sort((a, b) => (b.current?.grossSales || 0) - (a.current?.grossSales || 0));
 
   return sendSuccess(res, 'Period comparison fetched successfully', {
+    ...buildDataAvailability(current.length, report_type),
     current_period: {
       from: current_from,
       to: current_to,
       record_count: current.length,
       reference_ids: referenceIdsFromRecords(current),
+      ...buildDataAvailability(current.length, report_type),
     },
     compare_period: {
       from: compare_from,
       to: compare_to,
       record_count: compare.length,
       reference_ids: referenceIdsFromRecords(compare),
+      ...buildDataAvailability(compare.length, report_type),
     },
     report_type: report_type === 'monthly_store_kpi' ? 'monthly_store_kpi' : 'weekly_financial',
     metrics,
@@ -3806,6 +3836,7 @@ const getAnalyticsV2Trend = asyncHandler(async (req, res) => {
     period: { from: from_date || null, to: to_date || null },
     granularity,
     report_type: normalizedReportType,
+    ...buildDataAvailability(records.length, normalizedReportType),
     metrics,
     group_by: groupByShop ? 'shop' : 'total',
     total: {
