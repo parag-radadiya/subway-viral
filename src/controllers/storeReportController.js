@@ -2862,6 +2862,152 @@ const upsertSingleMonthlySale2026 = asyncHandler(async (req, res) => {
   return sendSuccess(res, 'Monthly Sale 2026 record upserted', { record }, 200);
 });
 
+// ---------- Weekly / Monthly Sale: edit + delete ----------
+
+// Hide records outside the caller's shop scope (mirrors the GET endpoints).
+function assertRecordShopAllowed(req, record, notFoundMessage) {
+  const shopScope = buildShopScope(req.user);
+  if (shopScope.all) return;
+  const sid = record.shop_id ? String(record.shop_id._id || record.shop_id) : null;
+  if (!sid || !isShopAllowed(shopScope, sid)) {
+    throw new AppError(notFoundMessage, 404);
+  }
+}
+
+// Resolve an incoming shop_id/store_name onto the record, enforcing scope, and
+// keep store_key in sync. Returns nothing; mutates `record`.
+async function applyShopIdentityToRecord(req, record, { store_name, shop_id: inputShopId }) {
+  if (inputShopId === undefined && store_name === undefined) return;
+
+  const shopLookup = await buildShopLookup();
+  let shop = null;
+  if (inputShopId) shop = shopLookup.byId.get(String(inputShopId));
+  else if (store_name) shop = await getOrCreateShop(store_name, shopLookup);
+
+  const newShopId = shop?._id ? String(shop._id) : inputShopId ? String(inputShopId) : null;
+  if (newShopId) {
+    const shopScope = buildShopScope(req.user);
+    if (!shopScope.all && !isShopAllowed(shopScope, newShopId)) {
+      throw new AppError('Forbidden: shop is outside your assigned scope', 403);
+    }
+  }
+
+  if (shop) {
+    record.shop_id = shop._id;
+    record.store_name_raw = store_name || shop.name;
+    record.store_key = normalizeStoreName(store_name || shop.name) || record.store_key;
+  } else if (store_name) {
+    record.store_name_raw = store_name;
+    record.store_key = normalizeStoreName(store_name) || 'unknown';
+  }
+}
+
+function assertMetricsObject(metrics) {
+  if (metrics === undefined) return;
+  if (typeof metrics !== 'object' || metrics === null || Array.isArray(metrics)) {
+    throw new AppError('metrics must be an object', 400);
+  }
+}
+
+const updateWeekly2026 = asyncHandler(async (req, res) => {
+  const record = await StoreReportWeekly2026B.findById(req.params.id);
+  if (!record) throw new AppError('Weekly 2026 record not found', 404);
+  assertRecordShopAllowed(req, record, 'Weekly 2026 record not found');
+
+  const { store_name, shop_id, year, month, week_number, week_range_label, metrics, source_sheet } =
+    req.body;
+
+  assertMetricsObject(metrics);
+  await applyShopIdentityToRecord(req, record, { store_name, shop_id });
+
+  if (source_sheet !== undefined) {
+    record.source_sheet = normalizeText(source_sheet) || record.source_sheet;
+  }
+  if (year !== undefined) record.year = Number(year);
+  if (month !== undefined) record.month = Number(month);
+  if (week_number !== undefined) record.week_number = Number(week_number);
+
+  // Identity fields drive the unique key — recompute it after any change.
+  record.period_key = toPeriodKey('weekly_financial', record.year, record.month, record.week_number);
+
+  if (week_range_label !== undefined) {
+    const label = normalizeText(week_range_label) || null;
+    record.week_range_label = label;
+    if (label) {
+      const parsed = parseWeekRange(label, record.year);
+      if (parsed) {
+        record.week_start = parsed.weekStart;
+        record.week_end = parsed.weekEnd;
+        record.week_range_label = parsed.weekRangeLabel;
+      }
+    }
+  }
+  if (!record.week_start || !record.week_end) {
+    record.week_start = new Date(Date.UTC(record.year, record.month - 1, 1, 0, 0, 0, 0));
+    record.week_end = new Date(Date.UTC(record.year, record.month, 0, 23, 59, 59, 999));
+  }
+
+  if (metrics !== undefined) record.metrics = metrics;
+  record.updated_by = req.user?._id || null;
+
+  try {
+    await record.save();
+  } catch (err) {
+    if (err.code === 11000) {
+      throw new AppError('A weekly record with the same sheet/period/store already exists', 409);
+    }
+    throw err;
+  }
+  return sendSuccess(res, 'Weekly 2026 record updated', { record });
+});
+
+const deleteWeekly2026 = asyncHandler(async (req, res) => {
+  const record = await StoreReportWeekly2026B.findById(req.params.id);
+  if (!record) throw new AppError('Weekly 2026 record not found', 404);
+  assertRecordShopAllowed(req, record, 'Weekly 2026 record not found');
+  await record.deleteOne();
+  return sendSuccess(res, 'Weekly 2026 record deleted', { record });
+});
+
+const updateMonthlySale2026 = asyncHandler(async (req, res) => {
+  const record = await StoreReportMonthlySale2026.findById(req.params.id);
+  if (!record) throw new AppError('Monthly Sale 2026 record not found', 404);
+  assertRecordShopAllowed(req, record, 'Monthly Sale 2026 record not found');
+
+  const { store_name, shop_id, year, month, metrics, source_sheet } = req.body;
+
+  assertMetricsObject(metrics);
+  await applyShopIdentityToRecord(req, record, { store_name, shop_id });
+
+  if (source_sheet !== undefined) {
+    record.source_sheet = normalizeText(source_sheet) || record.source_sheet;
+  }
+  if (year !== undefined) record.year = Number(year);
+  if (month !== undefined) record.month = Number(month);
+  record.period_key = `${record.year}-${String(record.month).padStart(2, '0')}`;
+
+  if (metrics !== undefined) record.metrics = metrics;
+  record.updated_by = req.user?._id || null;
+
+  try {
+    await record.save();
+  } catch (err) {
+    if (err.code === 11000) {
+      throw new AppError('A monthly record with the same sheet/period/store already exists', 409);
+    }
+    throw err;
+  }
+  return sendSuccess(res, 'Monthly Sale 2026 record updated', { record });
+});
+
+const deleteMonthlySale2026 = asyncHandler(async (req, res) => {
+  const record = await StoreReportMonthlySale2026.findById(req.params.id);
+  if (!record) throw new AppError('Monthly Sale 2026 record not found', 404);
+  assertRecordShopAllowed(req, record, 'Monthly Sale 2026 record not found');
+  await record.deleteOne();
+  return sendSuccess(res, 'Monthly Sale 2026 record deleted', { record });
+});
+
 // ---------- Excel Export ----------
 
 const MONTH_NAMES = [
@@ -3684,8 +3830,12 @@ module.exports = {
   getStoreReportDashboardAnalytics,
   getWeekly2026,
   upsertSingleWeekly2026,
+  updateWeekly2026,
+  deleteWeekly2026,
   getMonthlySale2026,
   upsertSingleMonthlySale2026,
+  updateMonthlySale2026,
+  deleteMonthlySale2026,
   exportExcel,
   // v2 analytics
   getAnalyticsV2KpiMatrix,
