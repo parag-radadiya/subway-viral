@@ -141,6 +141,8 @@ const updateShop = asyncHandler(async (req, res) => {
   if (req.body.max_shift_duration_hours !== undefined) {
     shop.max_shift_duration_hours = req.body.max_shift_duration_hours;
   }
+  if (req.body.is_active !== undefined) shop.is_active = Boolean(req.body.is_active);
+  if (req.body.is_all_shops !== undefined) shop.is_all_shops = Boolean(req.body.is_all_shops);
   if (nextOpening !== null) shop.opening_time = nextOpening;
   if (nextClosing !== null) shop.closing_time = nextClosing;
 

@@ -12,8 +12,12 @@ const {
   getStoreReportDashboardAnalytics,
   getWeekly2026,
   upsertSingleWeekly2026,
+  updateWeekly2026,
+  deleteWeekly2026,
   getMonthlySale2026,
   upsertSingleMonthlySale2026,
+  updateMonthlySale2026,
+  deleteMonthlySale2026,
   exportExcel,
   getAnalyticsV2KpiMatrix,
   getAnalyticsV2ShopCompare,
@@ -88,6 +92,8 @@ router.get(
 // Weekly 2026B CRUD
 router.get('/weekly', protect, requirePermission('can_view_all_staff'), getWeekly2026);
 router.post('/weekly', protect, requirePermission('can_manage_rotas'), upsertSingleWeekly2026);
+router.put('/weekly/:id', protect, requirePermission('can_manage_rotas'), updateWeekly2026);
+router.delete('/weekly/:id', protect, requirePermission('can_manage_rotas'), deleteWeekly2026);
 
 // Monthly Sale 2026 CRUD
 router.get('/monthly-sale', protect, requirePermission('can_view_all_staff'), getMonthlySale2026);
@@ -96,6 +102,18 @@ router.post(
   protect,
   requirePermission('can_manage_rotas'),
   upsertSingleMonthlySale2026
+);
+router.put(
+  '/monthly-sale/:id',
+  protect,
+  requirePermission('can_manage_rotas'),
+  updateMonthlySale2026
+);
+router.delete(
+  '/monthly-sale/:id',
+  protect,
+  requirePermission('can_manage_rotas'),
+  deleteMonthlySale2026
 );
 
 // Export
