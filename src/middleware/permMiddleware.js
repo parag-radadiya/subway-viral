@@ -25,4 +25,20 @@ const requireRoot = () => {
   };
 };
 
-module.exports = { requirePermission, requireRoot };
+/**
+ * Restrict a route to one or more named roles.
+ * Usage: requireRoles(['Root', 'Admin'])
+ * Reads role_name from the user's populated role (set by authMiddleware).
+ */
+const requireRoles = (allowedRoles) => {
+  const allowed = Array.isArray(allowedRoles) ? allowedRoles : [allowedRoles];
+  return (req, res, next) => {
+    const roleName = req.user?.role_id?.role_name;
+    if (!roleName || !allowed.includes(roleName)) {
+      return next(new AppError(`Forbidden: requires one of roles [${allowed.join(', ')}]`, 403));
+    }
+    next();
+  };
+};
+
+module.exports = { requirePermission, requireRoot, requireRoles };
