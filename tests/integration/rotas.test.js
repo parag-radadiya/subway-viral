@@ -167,12 +167,22 @@ describe('Rota module integration', () => {
     expectEnvelope(res, 403);
   });
 
-  it('ROTA-012: allows manager dashboard endpoint', async () => {
+  it('ROTA-012: blocks manager from dashboard endpoint (Admin/Root only)', async () => {
     const managerLogin = await login('manager@org.com', 'Manager@1234');
 
     const res = await request(app)
       .get('/api/rotas/dashboard?week_start=2026-03-16')
       .set('Authorization', `Bearer ${managerLogin.token}`);
+
+    expectEnvelope(res, 403);
+  });
+
+  it('ROTA-012b: allows admin dashboard endpoint', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+
+    const res = await request(app)
+      .get('/api/rotas/dashboard?week_start=2026-03-16')
+      .set('Authorization', `Bearer ${adminLogin.token}`);
 
     expectEnvelope(res, 200);
     expect(Array.isArray(res.body.data.by_shop)).toBe(true);

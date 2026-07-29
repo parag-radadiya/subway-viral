@@ -25,9 +25,15 @@ const {
   getAnalyticsV2Trend,
 } = require('../controllers/storeReportController');
 const { protect } = require('../middleware/authMiddleware');
-const { requirePermission } = require('../middleware/permMiddleware');
+const { requirePermission, requireRoles } = require('../middleware/permMiddleware');
 
 const router = express.Router();
+
+// Financial records + dashboard analytics are Admin/Root only.
+// This router-level guard runs before every route below, blocking Manager and
+// lower even though they hold can_view_all_staff / can_manage_rotas. The
+// per-route permission checks remain as defense-in-depth.
+router.use(protect, requireRoles(['Root', 'Admin']));
 
 // Configure multer for file uploads
 // Store files in memory for processing
@@ -119,6 +125,7 @@ router.delete(
 // Export
 router.get('/export', protect, requirePermission('can_view_all_staff'), exportExcel);
 
+// todo : here we need to check operation in data.
 // ── Analytics v2 — flexible KPI matrix, shop/period compare, trends ──────────
 router.get(
   '/analytics/v2/kpi-matrix',
