@@ -12,7 +12,7 @@ const {
   getDashboard,
 } = require('../controllers/rotaController');
 const { protect } = require('../middleware/authMiddleware');
-const { requirePermission } = require('../middleware/permMiddleware');
+const { requirePermission, requireRoles } = require('../middleware/permMiddleware');
 
 /**
  * @swagger
@@ -162,7 +162,7 @@ router.delete('/week', protect, requirePermission('can_manage_rotas'), clearWeek
  *             schema:
  *               $ref: '#/components/schemas/DashboardResponse'
  */
-router.get('/dashboard', protect, requirePermission('can_view_all_staff'), getDashboard);
+router.get('/dashboard', protect, requireRoles(['Root', 'Admin']), getDashboard);
 
 // ─── Standard single-record CRUD ─────────────────────────────────────────────
 

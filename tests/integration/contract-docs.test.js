@@ -34,13 +34,21 @@ describe('Contract and documentation checks', () => {
   });
 
   it('DOC-002: frontend guide key endpoints are callable', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
     const managerLogin = await login('manager@org.com', 'Manager@1234');
 
+    // Dashboard is Admin/Root only — admin can call it, manager is forbidden.
     const dashboardRes = await request(app)
       .get('/api/rotas/dashboard?week_start=2026-03-16')
-      .set('Authorization', `Bearer ${managerLogin.token}`);
+      .set('Authorization', `Bearer ${adminLogin.token}`);
     expectEnvelope(dashboardRes, 200);
 
+    const managerDashboardRes = await request(app)
+      .get('/api/rotas/dashboard?week_start=2026-03-16')
+      .set('Authorization', `Bearer ${managerLogin.token}`);
+    expectEnvelope(managerDashboardRes, 403);
+
+    // Inventory remains available to managers (can_manage_inventory).
     const itemsRes = await request(app)
       .get('/api/inventory/items')
       .set('Authorization', `Bearer ${managerLogin.token}`);
