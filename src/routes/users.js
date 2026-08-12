@@ -186,6 +186,6 @@ router.get('/by-shop/:shopId/staff', protect, getUsersByShopExcludingRootAdmin);
  */
 router.get('/:id', protect, getUser);
 router.put('/:id', protect, requirePermission('can_create_users'), updateUser);
-router.delete('/:id', protect, requirePermission('can_create_users'), deleteUser);
+router.delete('/:id', protect, requirePermission('can_delete_staff'), deleteUser);
 
 module.exports = router;

@@ -247,11 +247,38 @@ const updateUser = asyncHandler(async (req, res) => {
   return sendSuccess(res, 'User updated successfully', { user });
 });
 
-// @route  DELETE /api/users/:id — soft delete
-// @access Admin
+// @route  DELETE /api/users/:id — soft delete (deactivate)
+// @access Requires can_delete_staff (Admin/Manager/Sub-Manager/Root)
+// Used to remove a staff member who has left. Shop-scoped managers may only
+// deactivate staff within their assigned shops and may not deactivate
+// Admin/Manager accounts; Root accounts can never be deactivated here.
 const deleteUser = asyncHandler(async (req, res) => {
+  const target = await User.findById(req.params.id).populate('role_id', 'role_name');
+  if (!target || !target.is_active) throw new AppError('User not found', 404);
+
+  if (target._id.toString() === req.user._id.toString()) {
+    throw new AppError('You cannot deactivate your own account', 400);
+  }
+
+  const targetRoleName = target.role_id?.role_name || '';
+  if (targetRoleName === 'Root') {
+    throw new AppError('Forbidden: Root users cannot be deactivated', 403);
+  }
+
+  // Shop-scoped actors (Manager/Sub-Manager) are limited to staff in their
+  // assigned shops and cannot deactivate Admin/Manager-level accounts.
+  const scope = buildReadScope(req.user);
+  if (scope.mode !== 'all') {
+    if (['Admin', 'Manager'].includes(targetRoleName)) {
+      throw new AppError('Forbidden: not allowed to deactivate this user', 403);
+    }
+    const shopScope = buildShopScope(req.user);
+    if (!isShopAllowed(shopScope, target.active_shop_id || target.shop_id)) {
+      throw new AppError('Forbidden: user is outside your assigned scope', 403);
+    }
+  }
+
   const user = await User.findByIdAndUpdate(req.params.id, { is_active: false }, { new: true });
-  if (!user) throw new AppError('User not found', 404);
   return sendSuccess(res, 'User deactivated successfully', { user });
 });
 

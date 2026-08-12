@@ -462,7 +462,13 @@ const DEFAULT_BULK_MAX_SHIFT_MINUTES = 600; // 10h
 // Anything that cannot be placed is surfaced (not silently overlapped):
 //  - `gaps`: open-window time no eligible user could cover under the limits
 //  - `leftoverByUser`: target minutes that did not fit in the available windows
-function allocateBulkShiftsWithLimits({ windows, userIds, targetMinutesByUser, minMinutes, maxMinutes }) {
+function allocateBulkShiftsWithLimits({
+  windows,
+  userIds,
+  targetMinutesByUser,
+  minMinutes,
+  maxMinutes,
+}) {
   const allocationsByUser = new Map(userIds.map((userId) => [userId, []]));
   const remaining = new Map(
     userIds.map((userId) => [userId, Math.max(0, Number(targetMinutesByUser.get(userId)) || 0)])
@@ -952,6 +958,127 @@ const punchOut = asyncHandler(async (req, res) => {
   await attendance.save();
 
   return sendSuccess(res, 'Punch-out successful', { attendance });
+});
+
+// ─────────────────────────────────────────────
+// Correct punch-in / punch-out times (Admin / Manager / Sub-Manager)
+// PUT /api/attendance/:id/correct
+// Requires: can_correct_attendance (checked in route via permMiddleware)
+//
+// Lets an authorised manager fix a shift's clock-in/out after the fact — e.g.
+// a shift that was auto punched-out at the wrong time. Staff cannot change a
+// closed shift themselves; this is the manager override. Shop-scoped managers
+// may only correct records for shops within their assigned scope.
+// ─────────────────────────────────────────────
+const correctAttendanceTimes = asyncHandler(async (req, res) => {
+  const { punch_in, punch_out, note } = req.body;
+
+  if (punch_in === undefined && punch_out === undefined) {
+    throw new AppError('Provide punch_in and/or punch_out to correct', 400);
+  }
+
+  const attendance = await Attendance.findById(req.params.id);
+  if (!attendance || attendance.is_active === false) {
+    throw new AppError('Attendance record not found', 404);
+  }
+
+  // Shop-scope enforcement. The route already checks the permission; here we
+  // ensure shop-scoped managers can only touch their assigned shops.
+  const scope = buildReadScope(req.user);
+  if (scope.mode === 'self') {
+    throw new AppError('Forbidden: not allowed to correct attendance', 403);
+  }
+  if (
+    scope.mode === 'shops' &&
+    !scope.shopScope.all &&
+    !isShopAllowed(scope.shopScope, attendance.shop_id)
+  ) {
+    throw new AppError('Forbidden: attendance is outside your assigned scope', 403);
+  }
+
+  const now = new Date();
+  let nextPunchIn = attendance.punch_in;
+  let nextPunchOut = attendance.punch_out;
+
+  if (punch_in !== undefined) {
+    const parsed = new Date(punch_in);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new AppError('punch_in must be a valid ISO date', 400);
+    }
+    if (parsed > now) {
+      throw new AppError('punch_in cannot be in the future', 400);
+    }
+    nextPunchIn = parsed;
+  }
+
+  if (punch_out !== undefined) {
+    const parsed = new Date(punch_out);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new AppError('punch_out must be a valid ISO date', 400);
+    }
+    if (parsed > now) {
+      throw new AppError('punch_out cannot be in the future', 400);
+    }
+    nextPunchOut = parsed;
+  }
+
+  if (nextPunchIn && nextPunchOut && nextPunchOut <= nextPunchIn) {
+    throw new AppError('punch_out must be after punch_in', 400);
+  }
+
+  // An open break has no end time; correcting a window around it is ambiguous.
+  if (findOpenBreak(attendance)) {
+    throw new AppError('End the open break before correcting this shift', 400);
+  }
+
+  // The corrected window must still fully contain every recorded break.
+  const breakOutOfRange = (attendance.breaks || []).some((entry) => {
+    if (nextPunchIn && entry.break_start && new Date(entry.break_start) < nextPunchIn) return true;
+    if (nextPunchOut && entry.break_end && new Date(entry.break_end) > nextPunchOut) return true;
+    return false;
+  });
+  if (breakOutOfRange) {
+    throw new AppError('Corrected times must fully contain existing breaks', 400);
+  }
+
+  // Snapshot the first pre-correction values once, for audit.
+  if (!attendance.corrected_at) {
+    attendance.original_punch_in = attendance.punch_in;
+    attendance.original_punch_out = attendance.punch_out;
+  }
+
+  attendance.punch_in = nextPunchIn;
+  attendance.punch_out = nextPunchOut;
+  attendance.punch_out_source = nextPunchOut ? 'Manual' : attendance.punch_out_source;
+
+  // A manual correction supersedes any earlier hours adjustment; clear the
+  // derived effective/adjusted window so totals recompute from corrected times.
+  attendance.adjusted_minutes = null;
+  attendance.adjusted_at = null;
+  attendance.adjusted_by = null;
+  attendance.adjustment_note = null;
+  attendance.effective_start = null;
+  attendance.effective_end = null;
+  attendance.effective_minutes = null;
+  attendance.effective_source = null;
+
+  attendance.corrected_by = req.user._id;
+  attendance.corrected_at = now;
+  if (note !== undefined) {
+    attendance.correction_note = note === null ? null : String(note).slice(0, 300);
+  }
+
+  await attendance.save();
+
+  const populated = await attendance.populate([
+    { path: 'user_id', select: 'name email' },
+    { path: 'shop_id', select: 'name' },
+    { path: 'corrected_by', select: 'name email' },
+  ]);
+
+  return sendSuccess(res, 'Attendance times corrected successfully', {
+    attendance: { ...populated.toObject(), ...buildBreakSummary(populated) },
+  });
 });
 
 function hasPermission(user, permission) {
@@ -2249,7 +2376,10 @@ function buildBulkPlanResponse(plan) {
     };
   });
 
-  const allocatedTotal = users.reduce((sum, u) => sum + Math.round((u.allocated_hours || 0) * 60), 0);
+  const allocatedTotal = users.reduce(
+    (sum, u) => sum + Math.round((u.allocated_hours || 0) * 60),
+    0
+  );
 
   return {
     shop_id: normalizeId(plan.shopId),
@@ -2633,6 +2763,7 @@ module.exports = {
   verifyLocation,
   punchIn,
   punchOut,
+  correctAttendanceTimes,
   breakStart,
   breakEnd,
   manualPunchIn,

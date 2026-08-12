@@ -20,6 +20,8 @@ const roleSchema = new mongoose.Schema(
         can_adjust_attendance_hours: false,
         can_manage_shops: false,
         can_manage_roles: false,
+        can_correct_attendance: false,
+        can_delete_staff: false,
       },
     },
   },
