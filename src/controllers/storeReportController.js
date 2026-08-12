@@ -2941,7 +2941,12 @@ const updateWeekly2026 = asyncHandler(async (req, res) => {
   if (week_number !== undefined) record.week_number = Number(week_number);
 
   // Identity fields drive the unique key — recompute it after any change.
-  record.period_key = toPeriodKey('weekly_financial', record.year, record.month, record.week_number);
+  record.period_key = toPeriodKey(
+    'weekly_financial',
+    record.year,
+    record.month,
+    record.week_number
+  );
 
   if (week_range_label !== undefined) {
     const label = normalizeText(week_range_label) || null;
@@ -3330,6 +3335,19 @@ function buildMonthRangeFilter(fromDate, toDate) {
   };
 }
 
+// Some spreadsheet imports created pseudo-shops whose rows are company-wide
+// roll-ups (e.g. an "All Shops" shop whose Sales equals the sum of every store's
+// Total-3PD). Those are grand totals, not stores — summing them into analytics
+// double-counts revenue, so every v2 analytics fetch drops any record whose shop
+// resolves to one of these aggregate labels. Match is on the normalized shop
+// name (real stores are never named "all shops").
+const ANALYTICS_EXCLUDED_SHOP_NAMES = new Set(['all shops']);
+
+function isExcludedAggregateShop(record) {
+  const name = record?.shop_id?.name ?? record?.store_name_raw ?? '';
+  return ANALYTICS_EXCLUDED_SHOP_NAMES.has(String(name).trim().toLowerCase());
+}
+
 // Canonical fetcher: reads from StoreReportWeekly2026B or StoreReportMonthlySale2026
 // based on report_type. Used by all v2 analytics endpoints (kpi-matrix, shop-compare,
 // period-compare, trend). The `view` param from the StoreReportEntry-era flow is
@@ -3341,6 +3359,7 @@ function buildMonthRangeFilter(fromDate, toDate) {
 //   3. StoreReportEntry admin_weekly    — admin-typed overrides
 // Dedup key is (shop_id, period_key); later sources override earlier ones, so
 // precedence is: admin_weekly > Weekly2026B > excel_raw.
+// Aggregate/non-store rows (see isExcludedAggregateShop) are filtered out last.
 async function fetchCanonicalRecordsForPeriod({ fromDate, toDate, shopIds, reportType }) {
   const isMonthly = reportType === 'monthly_store_kpi';
 
@@ -3351,7 +3370,11 @@ async function fetchCanonicalRecordsForPeriod({ fromDate, toDate, shopIds, repor
         $in: shopIds.map((id) => new (require('mongoose').Types.ObjectId)(id)),
       };
     }
-    return StoreReportMonthlySale2026.find(monthlyFilter).populate('shop_id', 'name');
+    const monthlyRows = await StoreReportMonthlySale2026.find(monthlyFilter).populate(
+      'shop_id',
+      'name'
+    );
+    return monthlyRows.filter((r) => !isExcludedAggregateShop(r));
   }
 
   const dateFilter = fromDate || toDate ? buildDateRangeFilter(fromDate, toDate) : {};
@@ -3387,7 +3410,7 @@ async function fetchCanonicalRecordsForPeriod({ fromDate, toDate, shopIds, repor
   for (const r of excelRawRows) merged.set(keyOf(r), r);
   for (const r of weeklyRows) merged.set(keyOf(r), r);
   for (const r of adminRows) merged.set(keyOf(r), r);
-  return Array.from(merged.values());
+  return Array.from(merged.values()).filter((r) => !isExcludedAggregateShop(r));
 }
 
 async function fetchRecordsForPeriod({ fromDate, toDate, shopIds, reportType, view }) {
