@@ -86,6 +86,32 @@ const attendanceSchema = new mongoose.Schema(
       enum: ['Actual', 'Adjusted'],
       default: null,
     },
+    // ─── Manual time correction (Admin/Manager/Sub-Manager) ───
+    // Set when a manager corrects punch_in/punch_out after the fact (e.g. to
+    // fix an auto punch-out). original_* snapshots the very first pre-correction
+    // values for audit; corrected_by/corrected_at/correction_note record who/why.
+    corrected_by: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    corrected_at: {
+      type: Date,
+      default: null,
+    },
+    correction_note: {
+      type: String,
+      maxlength: 300,
+      default: null,
+    },
+    original_punch_in: {
+      type: Date,
+      default: null,
+    },
+    original_punch_out: {
+      type: Date,
+      default: null,
+    },
     is_active: {
       type: Boolean,
       default: true,

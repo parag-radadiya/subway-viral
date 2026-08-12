@@ -38,6 +38,8 @@ const seed = async () => {
         can_manage_shops: true,
         can_manage_roles: true,
         can_adjust_attendance_hours: true,
+        can_correct_attendance: true,
+        can_delete_staff: true,
       },
     },
     {
@@ -51,6 +53,8 @@ const seed = async () => {
         can_manage_shops: true,
         can_manage_roles: false,
         can_adjust_attendance_hours: true,
+        can_correct_attendance: true,
+        can_delete_staff: true,
       },
     },
     {
@@ -64,6 +68,8 @@ const seed = async () => {
         can_manage_shops: false,
         can_manage_roles: false,
         can_adjust_attendance_hours: false,
+        can_correct_attendance: true,
+        can_delete_staff: true,
       },
     },
     {
@@ -77,6 +83,8 @@ const seed = async () => {
         can_manage_shops: false,
         can_manage_roles: false,
         can_adjust_attendance_hours: false,
+        can_correct_attendance: true,
+        can_delete_staff: true,
       },
     },
     {
@@ -90,6 +98,8 @@ const seed = async () => {
         can_manage_shops: false,
         can_manage_roles: false,
         can_adjust_attendance_hours: false,
+        can_correct_attendance: false,
+        can_delete_staff: false,
       },
     },
   ]);

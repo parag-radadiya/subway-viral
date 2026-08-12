@@ -4,6 +4,7 @@ const {
   verifyLocation,
   punchIn,
   punchOut,
+  correctAttendanceTimes,
   breakStart,
   breakEnd,
   manualPunchIn,
@@ -367,6 +368,65 @@ router.post('/manual-punch-in', protect, requirePermission('can_manual_punch'), 
  *         description: Attendance record not found
  */
 router.put('/:id/punch-out', protect, punchOut);
+
+/**
+ * @swagger
+ * /api/attendance/{id}/correct:
+ *   put:
+ *     summary: Correct punch-in/out times of a shift (Admin/Manager/Sub-Manager)
+ *     tags: [Attendance]
+ *     security:
+ *       - BearerAuth: []
+ *     description: |
+ *       Manager override to fix a shift's clock-in and/or clock-out after the
+ *       fact — e.g. a shift that was auto punched-out at the wrong time. Staff
+ *       cannot change a closed shift; this endpoint requires the
+ *       `can_correct_attendance` permission (Admin, Manager, Sub-Manager, Root).
+ *       Shop-scoped managers may only correct records within their assigned
+ *       shops. Send `punch_in` and/or `punch_out` (ISO date-times, not in the
+ *       future). The corrected window must be positive and fully contain any
+ *       recorded breaks. Applying a correction clears any prior hours
+ *       adjustment on the record.
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Attendance record ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               punch_in:
+ *                 type: string
+ *                 format: date-time
+ *               punch_out:
+ *                 type: string
+ *                 format: date-time
+ *               note:
+ *                 type: string
+ *                 maxLength: 300
+ *                 description: Optional reason for the correction (audit)
+ *     responses:
+ *       200:
+ *         description: Attendance times corrected
+ *       400:
+ *         description: Invalid/missing times, or window conflicts with breaks
+ *       403:
+ *         description: Missing can_correct_attendance permission or shop out of scope
+ *       404:
+ *         description: Attendance record not found
+ */
+router.put(
+  '/:id/correct',
+  protect,
+  requirePermission('can_correct_attendance'),
+  correctAttendanceTimes
+);
 
 /**
  * @swagger
