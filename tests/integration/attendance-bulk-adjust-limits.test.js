@@ -221,6 +221,44 @@ describe('bulk-by-shop min/max shift limits', () => {
     }
   });
 
+  it('long-open shop (16h/day): fills a tight full week, every hour placed + covered', async () => {
+    // Regression for the "swiss cottage" report: 07:00–23:00 (16h/day) × 7 days
+    // = 112h coverage, target 40/30/25/0/35 = 130h (only 18h of slack). The
+    // per-day matrix model must place every hour AND cover every open hour.
+    await Shop.findByIdAndUpdate(fixtures.shops.mainShop._id, {
+      opening_time: '07:00',
+      closing_time: '23:00',
+    });
+    const targets = [40, 30, 25, 0, 35];
+    const ids = [];
+    for (let i = 0; i < targets.length; i += 1) {
+      ids.push(await mkStaff(`swiss-${i}@org.com`));
+    }
+    const res = await request(app)
+      .post(APPLY)
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        shop_id: shopId,
+        from_date: '2026-08-02',
+        to_date: '2026-08-08',
+        adjustments: ids.map((user_id, i) => ({ user_id, target_hours: targets[i] })),
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.applied).toBe(true);
+    expect(res.body.data.has_gaps).toBe(false); // shop fully covered
+
+    for (let i = 0; i < ids.length; i += 1) {
+      const recs = await Attendance.find({ user_id: ids[i], is_active: { $ne: false } });
+      const mins = recs.reduce((sum, r) => sum + r.effective_minutes, 0);
+      expect(mins).toBe(targets[i] * 60);
+      recs.forEach((r) => {
+        expect(r.effective_minutes).toBeLessThanOrEqual(10 * 60);
+        expect(r.effective_minutes).toBeGreaterThanOrEqual(4 * 60);
+      });
+    }
+  });
+
   it('max_shift_hours override caps each shift', async () => {
     const staff = await mkStaff('cap@org.com');
     const res = await request(app)
