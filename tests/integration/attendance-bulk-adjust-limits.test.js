@@ -102,7 +102,7 @@ describe('bulk-by-shop min/max shift limits', () => {
     expect(res.body.data.users[0].shifts[0].hours).toBe(8);
   });
 
-  it('apply is feasible and single-staffed when two users tile the window exactly', async () => {
+  it('apply schedules two users independently, overlap allowed (each keeps its full hours)', async () => {
     const a = await mkStaff('a@org.com');
     const b = await mkStaff('b@org.com');
     const res = await request(app)
@@ -121,17 +121,58 @@ describe('bulk-by-shop min/max shift limits', () => {
     expect(res.status).toBe(200);
     expect(res.body.data.applied).toBe(true);
     expect(res.body.data.can_apply).toBe(true);
-    expect(res.body.data.has_gaps).toBe(false);
     expect(res.body.data.batch_id).toBeTruthy();
 
     const recs = await Attendance.find({ shop_id: shopId, is_active: { $ne: false } }).sort({
       punch_in: 1,
     });
     expect(recs).toHaveLength(2);
-    // no user has overlapping records, and the two are back-to-back (single presence)
-    expect(new Date(recs[0].punch_out) <= new Date(recs[1].punch_in)).toBe(true);
+    // Each user's full target is recorded; the two may overlap (parallel staff).
     const aRec = recs.find((r) => String(r.user_id) === a);
+    const bRec = recs.find((r) => String(r.user_id) === b);
     expect(aRec.effective_minutes).toBe(480);
+    expect(bRec.effective_minutes).toBe(240);
+    // Both start at the shop opening — proving overlap is now permitted.
+    expect(new Date(aRec.punch_in).getTime()).toBe(new Date(bRec.punch_in).getTime());
+  });
+
+  it('records the FULL requested hours across users even beyond shop open capacity', async () => {
+    // Shop open 08:00–18:00 (10h/day) × 5 days = 50h of open time.
+    // Two users asking 40h + 30h = 70h must ALL be recorded (overlap allowed),
+    // not capped at the 50h open duration.
+    await Shop.findByIdAndUpdate(fixtures.shops.mainShop._id, {
+      opening_time: '08:00',
+      closing_time: '18:00',
+    });
+    const a = await mkStaff('big-a@org.com');
+    const b = await mkStaff('big-b@org.com');
+    const res = await request(app)
+      .post(APPLY)
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        shop_id: shopId,
+        from_date: '2026-06-01',
+        to_date: '2026-06-05', // 5 × 10h windows = 50h capacity
+        adjustments: [
+          { user_id: a, target_hours: 40 },
+          { user_id: b, target_hours: 30 },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.applied).toBe(true);
+
+    const aMins = (await Attendance.find({ user_id: a, is_active: { $ne: false } })).reduce(
+      (sum, r) => sum + r.effective_minutes,
+      0
+    );
+    const bMins = (await Attendance.find({ user_id: b, is_active: { $ne: false } })).reduce(
+      (sum, r) => sum + r.effective_minutes,
+      0
+    );
+    expect(aMins).toBe(40 * 60);
+    expect(bMins).toBe(30 * 60);
+    expect(aMins + bMins).toBe(70 * 60); // full 70h recorded, not capped at 50h
   });
 
   it('max_shift_hours override caps each shift', async () => {
@@ -151,9 +192,9 @@ describe('bulk-by-shop min/max shift limits', () => {
     res.body.data.users[0].shifts.forEach((s) => expect(s.hours).toBeLessThanOrEqual(6));
   });
 
-  it('apply still succeeds (200) but reports a gap warning when one user cannot cover the window under max', async () => {
-    // Backward-compatible: coverage gaps caused purely by the min/max limits are
-    // applied and reported as warnings, not a 409 — the current flow keeps working.
+  it('409s when a single user target cannot fit the available open hours under max', async () => {
+    // One user asking 12h with only one 12h day and max 10h/shift cannot be
+    // fully placed — we reject rather than silently dropping the remainder.
     const staff = await mkStaff('gap@org.com');
     const res = await request(app)
       .post(APPLY)
@@ -161,18 +202,35 @@ describe('bulk-by-shop min/max shift limits', () => {
       .send({
         shop_id: shopId,
         from_date: '2026-06-01',
-        to_date: '2026-06-01', // 12h window, one user, max 10h → 2h gap
+        to_date: '2026-06-01', // one 12h window, one user, max 10h/shift
         adjustments: [{ user_id: staff, target_hours: 12 }],
       });
-    expect(res.status).toBe(200);
-    expect(res.body.data.applied).toBe(true);
-    expect(res.body.data.has_gaps).toBe(true);
-    const codes = res.body.data.warnings.map((w) => w.error_code);
-    expect(codes).toContain('COVERAGE_GAP_AFTER_ADJUSTMENT');
-    // the coverable portion (one 10h shift) IS written
-    const recs = await Attendance.find({ user_id: staff, is_active: { $ne: false } });
-    expect(recs).toHaveLength(1);
-    expect(recs[0].effective_minutes).toBe(600);
+    expect(res.status).toBe(409);
+    expect(res.body.data.error_code).toBe('UNALLOCATED_TARGET_HOURS');
+    expect(res.body.data.can_apply).toBe(false);
+    // nothing is written on a blocked request
+    expect(await Attendance.countDocuments({ user_id: staff })).toBe(0);
+  });
+
+  it('409s when a single user target exceeds total available open hours', async () => {
+    // Shop open 08:00–18:00 (10h/day) × 3 days = 30h; one user asks 40h.
+    await Shop.findByIdAndUpdate(fixtures.shops.mainShop._id, {
+      opening_time: '08:00',
+      closing_time: '18:00',
+    });
+    const staff = await mkStaff('too-much@org.com');
+    const res = await request(app)
+      .post(APPLY)
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        shop_id: shopId,
+        from_date: '2026-06-01',
+        to_date: '2026-06-03', // 3 × 10h = 30h available
+        adjustments: [{ user_id: staff, target_hours: 40 }],
+      });
+    expect(res.status).toBe(409);
+    expect(res.body.data.error_code).toBe('UNALLOCATED_TARGET_HOURS');
+    expect(await Attendance.countDocuments({ user_id: staff })).toBe(0);
   });
 
   it('still 409s when total target hours are below required coverage (unchanged pre-existing rule)', async () => {
