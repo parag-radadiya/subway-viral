@@ -61,7 +61,13 @@ describe('bulk-by-shop min/max shift limits', () => {
     await disconnectSandboxDb();
   });
 
-  it('preview splits an 18h target into multiple shifts, each within max (10h), no writes', async () => {
+  it('splits a >max target into multiple shifts, each within limits, no writes', async () => {
+    // Shop 08:00–18:00 (10h/day); a single user covering both days = 20h,
+    // which must split into two ≤10h shifts (one per day).
+    await Shop.findByIdAndUpdate(fixtures.shops.mainShop._id, {
+      opening_time: '08:00',
+      closing_time: '18:00',
+    });
     const staff = await mkStaff('split@org.com');
     const res = await request(app)
       .post(PREVIEW)
@@ -69,16 +75,17 @@ describe('bulk-by-shop min/max shift limits', () => {
       .send({
         shop_id: shopId,
         from_date: '2026-06-01',
-        to_date: '2026-06-02', // two 12h windows
-        adjustments: [{ user_id: staff, target_hours: 18 }],
+        to_date: '2026-06-02', // two 10h windows = 20h coverage
+        adjustments: [{ user_id: staff, target_hours: 20 }],
       });
 
     expect(res.status).toBe(200);
+    expect(res.body.data.can_apply).toBe(true);
     const user = res.body.data.users[0];
-    expect(user.shift_count).toBe(2); // 10h + 8h
+    expect(user.shift_count).toBe(2);
     user.shifts.forEach((s) => expect(s.hours).toBeLessThanOrEqual(10));
     user.shifts.forEach((s) => expect(s.hours).toBeGreaterThanOrEqual(4));
-    expect(user.allocated_hours).toBe(18);
+    expect(user.allocated_hours).toBe(20);
     expect(user.unallocated_hours).toBe(0);
     expect(noOverlap(user.shifts)).toBe(true);
 
@@ -102,7 +109,7 @@ describe('bulk-by-shop min/max shift limits', () => {
     expect(res.body.data.users[0].shifts[0].hours).toBe(8);
   });
 
-  it('apply schedules two users independently, overlap allowed (each keeps its full hours)', async () => {
+  it('tiles two users to cover the window exactly when total == coverage (no overlap needed)', async () => {
     const a = await mkStaff('a@org.com');
     const b = await mkStaff('b@org.com');
     const res = await request(app)
@@ -111,7 +118,7 @@ describe('bulk-by-shop min/max shift limits', () => {
       .send({
         shop_id: shopId,
         from_date: '2026-06-01',
-        to_date: '2026-06-01', // one 12h window
+        to_date: '2026-06-01', // one 12h window; 8 + 4 = 12h = coverage
         adjustments: [
           { user_id: a, target_hours: 8 },
           { user_id: b, target_hours: 4 },
@@ -121,19 +128,19 @@ describe('bulk-by-shop min/max shift limits', () => {
     expect(res.status).toBe(200);
     expect(res.body.data.applied).toBe(true);
     expect(res.body.data.can_apply).toBe(true);
+    expect(res.body.data.has_gaps).toBe(false); // full coverage
     expect(res.body.data.batch_id).toBeTruthy();
 
     const recs = await Attendance.find({ shop_id: shopId, is_active: { $ne: false } }).sort({
       punch_in: 1,
     });
     expect(recs).toHaveLength(2);
-    // Each user's full target is recorded; the two may overlap (parallel staff).
+    // Total equals coverage, so phase 1 tiles them back-to-back (single presence).
+    expect(new Date(recs[0].punch_out) <= new Date(recs[1].punch_in)).toBe(true);
     const aRec = recs.find((r) => String(r.user_id) === a);
     const bRec = recs.find((r) => String(r.user_id) === b);
     expect(aRec.effective_minutes).toBe(480);
     expect(bRec.effective_minutes).toBe(240);
-    // Both start at the shop opening — proving overlap is now permitted.
-    expect(new Date(aRec.punch_in).getTime()).toBe(new Date(bRec.punch_in).getTime());
   });
 
   it('records the FULL requested hours across users even beyond shop open capacity', async () => {
