@@ -182,6 +182,45 @@ describe('bulk-by-shop min/max shift limits', () => {
     expect(aMins + bMins).toBe(70 * 60); // full 70h recorded, not capped at 50h
   });
 
+  it('does not strand sub-min remainders: multi-user week records every hour, no 409', async () => {
+    // Regression for the real report: 40/30/15/0/35 over a 7-day, 12h/day shop.
+    // Balanced splitting + remainder absorption must place every hour (no stray
+    // sub-4h leftover triggering UNALLOCATED_TARGET_HOURS).
+    await Shop.findByIdAndUpdate(fixtures.shops.mainShop._id, {
+      opening_time: '08:00',
+      closing_time: '20:00',
+    });
+    const targets = [40, 30, 15, 0, 35];
+    const ids = [];
+    for (let i = 0; i < targets.length; i += 1) {
+      ids.push(await mkStaff(`week-${i}@org.com`));
+    }
+    const res = await request(app)
+      .post(APPLY)
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        shop_id: shopId,
+        from_date: '2026-08-02',
+        to_date: '2026-08-08', // 7 × 12h windows = 84h coverage
+        adjustments: ids.map((user_id, i) => ({ user_id, target_hours: targets[i] })),
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.applied).toBe(true);
+    expect(res.body.data.has_gaps).toBe(false); // shop fully covered
+
+    // Every user's full target is recorded, and every shift respects 4h–10h.
+    for (let i = 0; i < ids.length; i += 1) {
+      const recs = await Attendance.find({ user_id: ids[i], is_active: { $ne: false } });
+      const mins = recs.reduce((sum, r) => sum + r.effective_minutes, 0);
+      expect(mins).toBe(targets[i] * 60);
+      recs.forEach((r) => {
+        expect(r.effective_minutes).toBeLessThanOrEqual(10 * 60);
+        expect(r.effective_minutes).toBeGreaterThanOrEqual(4 * 60);
+      });
+    }
+  });
+
   it('max_shift_hours override caps each shift', async () => {
     const staff = await mkStaff('cap@org.com');
     const res = await request(app)

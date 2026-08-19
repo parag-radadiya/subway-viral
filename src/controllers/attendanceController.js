@@ -434,24 +434,43 @@ function mergeIntervals(intervals) {
 const DEFAULT_BULK_MIN_SHIFT_MINUTES = 240; // 4h
 const DEFAULT_BULK_MAX_SHIFT_MINUTES = 600; // 10h
 
-// Allocate one user's target into shifts across the shop's open windows.
+// Split `total` minutes into the fewest, most-balanced shift pieces, each within
+// [minM, maxM]. Prefers longer, evenly-sized shifts and only uses the minimum
+// length when arithmetic forces it — e.g. 35h → 9+9+9+8 (never a stray 4h),
+// 15h → 8+7 (not 10+5), 30h → 10+10+10. Returns null when `total` cannot form
+// even one valid piece (i.e. 0 < total < minM).
+function balancedShiftPieces(total, minM, maxM) {
+  if (total <= 0) return [];
+  if (total < minM) return null;
+  const n = Math.ceil(total / maxM); // fewest pieces that keep each <= max
+  const base = Math.floor(total / n);
+  const remainder = total - base * n;
+  const pieces = [];
+  for (let i = 0; i < n; i += 1) pieces.push(base + (i < remainder ? 1 : 0));
+  if (pieces.some((p) => p < minM || p > maxM)) return null;
+  return pieces;
+}
+
+// Allocate every selected user's target into shifts across the shop's open
+// windows. Goal: cover every open hour of the shop AND record each user's full
+// target hours. Users may overlap (a real shop runs several staff at once), so
+// the total recorded is NOT capped by the shop's open duration.
 //
-// TWO-PHASE allocation. Goal: cover every open hour of the shop AND record each
-// user's full target hours. Users may overlap (a real shop runs several staff at
-// once), so the total recorded is NOT capped by the shop's open duration.
+//  Phase 1 (coverage): tile each open window back-to-back so every open instant
+//    is staffed. Greedy (fills with each user's available hours) — this is the
+//    robust way to cover heterogeneous targets, and only produces a minimum-
+//    length shift when the users' remaining hours force it.
+//  Phase 2 (burn remainder): place each user's leftover target as balanced
+//    shifts (see balancedShiftPieces — prefers 6–9h shifts, avoids stray 4h) on
+//    days they are not already working. These may overlap the coverage layer.
+//  Phase 3 (absorb residual): if a user still has a small remainder (typically
+//    < min shift), lengthen one of their existing shifts to absorb it (staying
+//    ≤ max and inside open hours) instead of leaving it unplaced. This prevents
+//    spurious "unallocated hours" rejections from packing arithmetic.
 //
-//  Phase 1 (coverage): tile each open window back-to-back with shifts so every
-//    open instant is staffed. Each shift is [minMinutes, maxMinutes]; a window
-//    longer than maxMinutes needs several users (one shift per user per window).
-//  Phase 2 (burn remainder): place each user's leftover target hours as
-//    additional shifts on days they are not already working — these may overlap
-//    the coverage layer.
-//
-// Every shift stays within [minMinutes, maxMinutes]; a smart "tail" pull-back
-// avoids stranding a sub-min remainder (e.g. 12h/day tiled as 8h+4h, not 10h+2h).
-//
-// Returns `gaps` (open time still uncovered — the caller rejects on these) and
-// `leftoverByUser` (target time that could not be placed — also rejected).
+// Every shift stays within [minMinutes, maxMinutes]. Returns `gaps` (open time
+// still uncovered — the caller rejects on these) and `leftoverByUser` (target
+// time that genuinely could not be placed — also rejected).
 function allocateBulkShiftsWithLimits({
   windows,
   userIds,
@@ -462,12 +481,18 @@ function allocateBulkShiftsWithLimits({
   const remaining = new Map(
     userIds.map((id) => [id, Math.max(0, Number(targetMinutesByUser.get(id)) || 0)])
   );
+  // Each allocation carries its window index so Phase 3 knows the open-hours cap.
   const allocationsByUser = new Map(userIds.map((id) => [id, []]));
   const usedByWindow = windows.map(() => new Set());
 
+  const placeShift = (user, wi, start, end) => {
+    allocationsByUser.get(user).push({ start, end, wi });
+    usedByWindow[wi].add(user);
+    remaining.set(user, (Number(remaining.get(user)) || 0) - minutesFromRange(start, end));
+  };
+
   // PHASE 1 — cover each open window by tiling shifts back-to-back.
   windows.forEach((window, wi) => {
-    const used = usedByWindow[wi];
     let cursor = new Date(window.start);
     const windowEnd = new Date(window.end);
 
@@ -476,7 +501,7 @@ function allocateBulkShiftsWithLimits({
       if (remCover < minMinutes) break; // sub-min sliver left uncovered → gap (blocks)
 
       const eligible = userIds
-        .filter((id) => !used.has(id) && (Number(remaining.get(id)) || 0) >= minMinutes)
+        .filter((id) => !usedByWindow[wi].has(id) && (Number(remaining.get(id)) || 0) >= minMinutes)
         .sort((a, b) => (Number(remaining.get(b)) || 0) - (Number(remaining.get(a)) || 0));
       if (eligible.length === 0) break; // nobody left who can cover → gap (blocks)
 
@@ -496,45 +521,49 @@ function allocateBulkShiftsWithLimits({
 
       const start = new Date(cursor);
       const end = new Date(start.getTime() + piece * 60000);
-      allocationsByUser.get(user).push({ start, end });
-      remaining.set(user, (Number(remaining.get(user)) || 0) - piece);
-      used.add(user);
+      placeShift(user, wi, start, end);
       cursor = end;
     }
   });
 
-  // PHASE 2 — place each user's remaining target as (possibly overlapping) shifts
+  // PHASE 2 — place each user's remaining target as balanced, mostly-long shifts
   // on days they are not already working (one shift per user per window).
   userIds.forEach((user) => {
-    for (let wi = 0; wi < windows.length && (Number(remaining.get(user)) || 0) > 0; wi += 1) {
-      if (usedByWindow[wi].has(user)) continue;
+    const pieces = balancedShiftPieces(Number(remaining.get(user)) || 0, minMinutes, maxMinutes);
+    if (!pieces) return; // sub-min residual handled in Phase 3
 
-      const window = windows[wi];
-      const windowLen = minutesFromRange(window.start, window.end);
-      if (windowLen < minMinutes) continue;
-
-      const rem = Number(remaining.get(user)) || 0;
-      if (rem < minMinutes) break; // sub-min leftover cannot form a valid shift
-
-      const cap = Math.min(maxMinutes, windowLen);
-      let chunk;
-      if (rem <= cap) {
-        chunk = rem;
-      } else {
-        chunk = cap;
-        const after = rem - chunk;
-        if (after > 0 && after < minMinutes) {
-          const pulled = chunk - (minMinutes - after);
-          if (pulled >= minMinutes) chunk = pulled;
-        }
+    for (const piece of pieces) {
+      let placed = false;
+      for (let wi = 0; wi < windows.length; wi += 1) {
+        if (usedByWindow[wi].has(user)) continue;
+        const windowLen = minutesFromRange(windows[wi].start, windows[wi].end);
+        if (windowLen < piece) continue;
+        const start = new Date(windows[wi].start);
+        const end = new Date(start.getTime() + piece * 60000);
+        placeShift(user, wi, start, end);
+        placed = true;
+        break;
       }
-
-      const start = new Date(window.start);
-      const end = new Date(start.getTime() + chunk * 60000);
-      allocationsByUser.get(user).push({ start, end });
-      remaining.set(user, rem - chunk);
-      usedByWindow[wi].add(user);
+      if (!placed) break; // no free day can host this piece → leftover (may block)
     }
+  });
+
+  // PHASE 3 — absorb any residual by lengthening a user's existing shifts,
+  // staying within max shift length and the shift's open window.
+  userIds.forEach((user) => {
+    let rem = Number(remaining.get(user)) || 0;
+    if (rem <= 0) return;
+    for (const shift of allocationsByUser.get(user)) {
+      if (rem <= 0) break;
+      const len = minutesFromRange(shift.start, shift.end);
+      const windowEnd = windows[shift.wi].end;
+      const headroom = Math.min(maxMinutes - len, minutesFromRange(shift.end, windowEnd));
+      if (headroom <= 0) continue;
+      const add = Math.min(headroom, rem);
+      shift.end = new Date(shift.end.getTime() + add * 60000);
+      rem -= add;
+    }
+    remaining.set(user, Math.max(0, rem));
   });
 
   const leftoverByUser = new Map(
@@ -544,7 +573,9 @@ function allocateBulkShiftsWithLimits({
   // Coverage gaps from the UNION of every placed shift. Any gap blocks the
   // request (full coverage is required).
   const allIntervals = [];
-  allocationsByUser.forEach((shifts) => shifts.forEach((shift) => allIntervals.push(shift)));
+  allocationsByUser.forEach((shifts) =>
+    shifts.forEach((shift) => allIntervals.push({ start: shift.start, end: shift.end }))
+  );
 
   const gaps = [];
   windows.forEach((window) => {
@@ -555,7 +586,16 @@ function allocateBulkShiftsWithLimits({
     }).forEach((gap) => gaps.push(gap));
   });
 
-  return { allocationsByUser, gaps, leftoverByUser };
+  // Strip the internal window index before returning.
+  const cleanAllocations = new Map();
+  allocationsByUser.forEach((shifts, id) =>
+    cleanAllocations.set(
+      id,
+      shifts.map((shift) => ({ start: shift.start, end: shift.end }))
+    )
+  );
+
+  return { allocationsByUser: cleanAllocations, gaps, leftoverByUser };
 }
 
 async function assertShopHasContinuousCoverage({
