@@ -18,6 +18,7 @@ const inventoryAuditRoutes = require('./routes/inventoryAudit');
 const observabilityRoutes = require('./routes/observability');
 const storeReportRoutes = require('./routes/storeReports');
 const notificationRoutes = require('./routes/notifications');
+const sandboxRoutes = require('./routes/sandbox');
 const { sendSuccess } = require('./utils/response');
 const { notFoundHandler, globalErrorHandler } = require('./middleware/errorHandler');
 const { requestAnalytics } = require('./middleware/requestAnalyticsMiddleware');
@@ -109,6 +110,7 @@ app.use('/api/inventory/audit-logs', inventoryAuditRoutes);
 app.use('/api/observability', observabilityRoutes);
 app.use('/api/store-reports', storeReportRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/sandbox', sandboxRoutes);
 
 // 404 + global error handlers
 app.use(notFoundHandler);
