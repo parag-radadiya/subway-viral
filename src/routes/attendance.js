@@ -245,26 +245,27 @@ router.post(
  *     summary: Bulk-apply effective-hours adjustments for selected users in one shop/date range
  *     tags: [Attendance]
  *     description: |
- *       Regenerates attendance for the selected users so each user's total matches
- *       their `target_hours`, split into shifts of `min_shift_hours`..`max_shift_hours`
- *       (defaults 4h/10h, overridable in the body). Each user is scheduled
- *       INDEPENDENTLY and users may overlap (parallel staff), so the total recorded
- *       is NOT capped by the shop's open duration — e.g. 40h + 30h records the full
- *       70h even if the shop is open only 50h. One shift per user per open day;
- *       targets larger than the max spill to later days. Returns `409` (with legacy
- *       `error_code`) when a user's hours cannot fit the available open days under
- *       the limits (`UNALLOCATED_TARGET_HOURS`), when not all users in range are
- *       selected (`UNSELECTED_USERS_IN_RANGE`), or when total target is below the
- *       shop's required coverage (`INSUFFICIENT_TARGET_HOURS_FOR_COVERAGE`).
- *       Shop-coverage gaps are informational `warnings[]` only (still `200`).
- *       Call `/preview` first to inspect.
+ *       Regenerates attendance for the selected users using a TWO-PHASE scheduler:
+ *       first it covers every open hour of the shop, then it places each user's
+ *       remaining `target_hours` as additional (possibly overlapping) shifts.
+ *       Users may overlap (parallel staff), so the total recorded is NOT capped by
+ *       the shop's open duration — e.g. 40h + 30h records the full 70h even if the
+ *       shop is open only 50h. Shifts are `min_shift_hours`..`max_shift_hours`
+ *       (defaults 4h/10h, overridable), one shift per user per open day; targets
+ *       larger than the max spill to later days. Returns `409` (with legacy
+ *       `error_code`) when the shop's open hours cannot be fully covered by the
+ *       selected users under the limits (`COVERAGE_GAP_AFTER_ADJUSTMENT`), when a
+ *       user's hours cannot all be placed (`UNALLOCATED_TARGET_HOURS`), when not
+ *       all users in range are selected (`UNSELECTED_USERS_IN_RANGE`), or when the
+ *       total target is below required coverage (`INSUFFICIENT_TARGET_HOURS_FOR_COVERAGE`).
+ *       Call `/preview` first to inspect feasibility (`can_apply`, `blocking_issues`).
  *     security:
  *       - BearerAuth: []
  *     responses:
  *       200:
- *         description: Bulk adjustment applied (may include informational coverage-gap warnings)
+ *         description: Bulk adjustment applied (full coverage achieved and all hours placed)
  *       409:
- *         description: Blocked — unallocatable user hours, unselected users in range, or total below required coverage
+ *         description: Blocked — coverage gap, unallocatable user hours, unselected users in range, or total below required coverage
  */
 router.post(
   '/adjust-hours/bulk-by-shop',

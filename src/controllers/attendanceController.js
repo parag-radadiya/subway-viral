@@ -436,56 +436,22 @@ const DEFAULT_BULK_MAX_SHIFT_MINUTES = 600; // 10h
 
 // Allocate one user's target into shifts across the shop's open windows.
 //
-// Each user is scheduled INDEPENDENTLY (users may overlap — a real shop runs
-// several staff at once), so the total recorded across all users is NOT capped
-// by the shop's open duration. Per user:
-//  - every emitted shift is within [minMinutes, maxMinutes]
-//  - at most one shift per open window (day); a shift starts at the window open
-//  - fewest shifts first (pack to max), spilling to later days when > max
-//  - a smart "tail" pull-back avoids stranding a sub-min remainder, so e.g.
-//    32h with 4h/10h limits becomes 10h+10h+8h+4h, not 10h+10h+10h+2h(lost)
+// TWO-PHASE allocation. Goal: cover every open hour of the shop AND record each
+// user's full target hours. Users may overlap (a real shop runs several staff at
+// once), so the total recorded is NOT capped by the shop's open duration.
 //
-// `leftover` is any target time that could not be placed within the available
-// open windows under the limits (the caller rejects the request when > 0).
-function allocateSingleUserShifts({ windows, targetMinutes, minMinutes, maxMinutes }) {
-  const shifts = [];
-  let remaining = Math.max(0, Number(targetMinutes) || 0);
-
-  for (const window of windows) {
-    if (remaining <= 0) break;
-
-    const windowLen = minutesFromRange(window.start, window.end);
-    if (windowLen < minMinutes) continue; // window too short to host a valid shift
-
-    const cap = Math.min(maxMinutes, windowLen);
-    let chunk;
-
-    if (remaining <= cap) {
-      // Fits in a single (final) shift — but only if it's at least a full min shift.
-      if (remaining < minMinutes) break; // sub-min sliver: cannot be placed
-      chunk = remaining;
-    } else {
-      // More than one shift needed. Take the cap, but if that would strand a
-      // sub-min remainder, pull back so the leftover is a full min shift.
-      chunk = cap;
-      const after = remaining - chunk;
-      if (after > 0 && after < minMinutes) {
-        const pulled = chunk - (minMinutes - after);
-        if (pulled >= minMinutes) chunk = pulled;
-      }
-    }
-
-    const start = new Date(window.start);
-    const end = new Date(start.getTime() + chunk * 60000);
-    shifts.push({ start, end });
-    remaining -= chunk;
-  }
-
-  return { shifts, leftover: Math.max(0, remaining) };
-}
-
-// Allocate every selected user independently (overlaps allowed), then compute
-// informational shop-coverage gaps from the UNION of all placed shifts.
+//  Phase 1 (coverage): tile each open window back-to-back with shifts so every
+//    open instant is staffed. Each shift is [minMinutes, maxMinutes]; a window
+//    longer than maxMinutes needs several users (one shift per user per window).
+//  Phase 2 (burn remainder): place each user's leftover target hours as
+//    additional shifts on days they are not already working — these may overlap
+//    the coverage layer.
+//
+// Every shift stays within [minMinutes, maxMinutes]; a smart "tail" pull-back
+// avoids stranding a sub-min remainder (e.g. 12h/day tiled as 8h+4h, not 10h+2h).
+//
+// Returns `gaps` (open time still uncovered — the caller rejects on these) and
+// `leftoverByUser` (target time that could not be placed — also rejected).
 function allocateBulkShiftsWithLimits({
   windows,
   userIds,
@@ -493,23 +459,90 @@ function allocateBulkShiftsWithLimits({
   minMinutes,
   maxMinutes,
 }) {
-  const allocationsByUser = new Map();
-  const leftoverByUser = new Map();
+  const remaining = new Map(
+    userIds.map((id) => [id, Math.max(0, Number(targetMinutesByUser.get(id)) || 0)])
+  );
+  const allocationsByUser = new Map(userIds.map((id) => [id, []]));
+  const usedByWindow = windows.map(() => new Set());
 
-  userIds.forEach((userId) => {
-    const { shifts, leftover } = allocateSingleUserShifts({
-      windows,
-      targetMinutes: Number(targetMinutesByUser.get(userId)) || 0,
-      minMinutes,
-      maxMinutes,
-    });
-    allocationsByUser.set(userId, shifts);
-    leftoverByUser.set(userId, leftover);
+  // PHASE 1 — cover each open window by tiling shifts back-to-back.
+  windows.forEach((window, wi) => {
+    const used = usedByWindow[wi];
+    let cursor = new Date(window.start);
+    const windowEnd = new Date(window.end);
+
+    while (cursor < windowEnd) {
+      const remCover = minutesFromRange(cursor, windowEnd);
+      if (remCover < minMinutes) break; // sub-min sliver left uncovered → gap (blocks)
+
+      const eligible = userIds
+        .filter((id) => !used.has(id) && (Number(remaining.get(id)) || 0) >= minMinutes)
+        .sort((a, b) => (Number(remaining.get(b)) || 0) - (Number(remaining.get(a)) || 0));
+      if (eligible.length === 0) break; // nobody left who can cover → gap (blocks)
+
+      const user = eligible[0];
+      const maxPiece = Math.min(maxMinutes, Number(remaining.get(user)) || 0);
+      let piece;
+      if (remCover <= maxPiece) {
+        piece = remCover; // this user finishes covering the window
+      } else {
+        piece = maxPiece;
+        const tail = remCover - piece;
+        if (tail > 0 && tail < minMinutes) {
+          const pulled = remCover - minMinutes; // leave exactly one min-shift tail
+          if (pulled >= minMinutes && pulled <= maxPiece) piece = pulled;
+        }
+      }
+
+      const start = new Date(cursor);
+      const end = new Date(start.getTime() + piece * 60000);
+      allocationsByUser.get(user).push({ start, end });
+      remaining.set(user, (Number(remaining.get(user)) || 0) - piece);
+      used.add(user);
+      cursor = end;
+    }
   });
 
-  // Coverage gaps are now informational only: with overlap allowed the shop
-  // may still have instants no one is scheduled for. Compute per window from
-  // the union of everyone's shifts.
+  // PHASE 2 — place each user's remaining target as (possibly overlapping) shifts
+  // on days they are not already working (one shift per user per window).
+  userIds.forEach((user) => {
+    for (let wi = 0; wi < windows.length && (Number(remaining.get(user)) || 0) > 0; wi += 1) {
+      if (usedByWindow[wi].has(user)) continue;
+
+      const window = windows[wi];
+      const windowLen = minutesFromRange(window.start, window.end);
+      if (windowLen < minMinutes) continue;
+
+      const rem = Number(remaining.get(user)) || 0;
+      if (rem < minMinutes) break; // sub-min leftover cannot form a valid shift
+
+      const cap = Math.min(maxMinutes, windowLen);
+      let chunk;
+      if (rem <= cap) {
+        chunk = rem;
+      } else {
+        chunk = cap;
+        const after = rem - chunk;
+        if (after > 0 && after < minMinutes) {
+          const pulled = chunk - (minMinutes - after);
+          if (pulled >= minMinutes) chunk = pulled;
+        }
+      }
+
+      const start = new Date(window.start);
+      const end = new Date(start.getTime() + chunk * 60000);
+      allocationsByUser.get(user).push({ start, end });
+      remaining.set(user, rem - chunk);
+      usedByWindow[wi].add(user);
+    }
+  });
+
+  const leftoverByUser = new Map(
+    userIds.map((id) => [id, Math.max(0, Number(remaining.get(id)) || 0)])
+  );
+
+  // Coverage gaps from the UNION of every placed shift. Any gap blocks the
+  // request (full coverage is required).
   const allIntervals = [];
   allocationsByUser.forEach((shifts) => shifts.forEach((shift) => allIntervals.push(shift)));
 
@@ -2312,14 +2345,13 @@ async function buildBulkAdjustmentPlan(req) {
       detail: { users: leftoverUsers },
     });
   }
-  // Coverage gaps are informational only now that users may overlap: the shop
-  // may have instants no one is scheduled for even though every user's target
-  // was fully allocated. Never blocks.
+  // Full coverage is required: any open time left uncovered after the two-phase
+  // allocation blocks the request.
   if (formattedGaps.length > 0) {
-    warnings.push({
+    blockingIssues.push({
       error_code: 'COVERAGE_GAP_AFTER_ADJUSTMENT',
       message:
-        'Some shop open-time is not covered by any scheduled user (informational; applied anyway)',
+        'Shop open-time cannot be fully covered by the selected users under the min/max shift limits',
       detail: {
         shop_id: normalizeId(shop_id),
         shop_name: shop.name,
