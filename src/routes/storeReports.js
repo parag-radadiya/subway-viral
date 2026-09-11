@@ -23,6 +23,7 @@ const {
   getAnalyticsV2ShopCompare,
   getAnalyticsV2PeriodCompare,
   getAnalyticsV2Trend,
+  getAnalyticsV2WeeklyReport,
 } = require('../controllers/storeReportController');
 const { protect } = require('../middleware/authMiddleware');
 const { requirePermission, requireRoles } = require('../middleware/permMiddleware');
@@ -150,6 +151,41 @@ router.get(
   protect,
   requirePermission('can_view_all_staff'),
   getAnalyticsV2Trend
+);
+
+/**
+ * @swagger
+ * /api/store-reports/analytics/v2/weekly-report:
+ *   get:
+ *     summary: Weekly report analytics — by-week totals series (summary, trend, comparison)
+ *     tags: [StoreReports]
+ *     description: |
+ *       Analytics over the by-week TOTALS data (one aggregate row per week across
+ *       all shops — not a per-shop breakdown). Returns a period `summary`, a
+ *       per-week `trend` series, and, when `compare_from`/`compare_to` are given,
+ *       a current-vs-compare `comparison` with per-metric deltas.
+ *     parameters:
+ *       - in: query
+ *         name: from_date
+ *         schema: { type: string, format: date }
+ *       - in: query
+ *         name: to_date
+ *         schema: { type: string, format: date }
+ *       - in: query
+ *         name: compare_from
+ *         schema: { type: string, format: date }
+ *       - in: query
+ *         name: compare_to
+ *         schema: { type: string, format: date }
+ *     responses:
+ *       200:
+ *         description: Weekly report analytics
+ */
+router.get(
+  '/analytics/v2/weekly-report',
+  protect,
+  requirePermission('can_view_all_staff'),
+  getAnalyticsV2WeeklyReport
 );
 
 module.exports = router;
