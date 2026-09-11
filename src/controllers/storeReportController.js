@@ -3341,7 +3341,10 @@ function buildMonthRangeFilter(fromDate, toDate) {
 // double-counts revenue, so every v2 analytics fetch drops any record whose shop
 // resolves to one of these aggregate labels. Match is on the normalized shop
 // name (real stores are never named "all shops").
-const ANALYTICS_EXCLUDED_SHOP_NAMES = new Set(['all shops']);
+// Aggregate/non-store rows that must not appear in per-shop analytics. The
+// by-week total rows (StoreReportWeekly2026B) carry no real shop and are stored
+// under "All Shops"/"Unknown"; both are excluded here.
+const ANALYTICS_EXCLUDED_SHOP_NAMES = new Set(['all shops', 'unknown']);
 
 function isExcludedAggregateShop(record) {
   const name = record?.shop_id?.name ?? record?.store_name_raw ?? '';
@@ -3872,6 +3875,120 @@ const getAnalyticsV2Trend = asyncHandler(async (req, res) => {
   });
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Weekly report analytics — the by-week TOTALS series (StoreReportWeekly2026B).
+// This is a single aggregate series (one row per week across all shops), NOT a
+// per-shop breakdown. Returns a period summary, a per-week trend, and an
+// optional current-vs-compare comparison — mirroring the dashboard analytics.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Clean, predictable metric keys mapped from the by-week row metrics (whose raw
+// keys are e.g. "vat18Percent" for the VAT amount, "commision" for commission).
+const WEEKLY_REPORT_METRICS = {
+  sales: ['sales'],
+  net: ['net'],
+  labour: ['labour'],
+  vat: ['vat18Percent', 'vat18', 'vat'],
+  royalties: ['royalties'],
+  foodCost: ['foodCost22Percent', 'foodCost22', 'foodcost22'],
+  commission: ['commision', 'commission'],
+  total: ['total'],
+  income: ['income'],
+};
+
+const pickWeeklyMetric = (metrics, aliases) => {
+  for (const key of aliases) {
+    const v = metrics ? metrics[key] : undefined;
+    if (typeof v === 'number' && Number.isFinite(v)) return v;
+  }
+  return 0;
+};
+
+async function fetchWeeklyTotalsForPeriod(fromDate, toDate) {
+  const filter = fromDate || toDate ? buildDateRangeFilter(fromDate, toDate) : {};
+  return StoreReportWeekly2026B.find(filter).sort({ year: 1, week_number: 1 });
+}
+
+function summarizeWeeklyReport(rows) {
+  const sum = Object.fromEntries(Object.keys(WEEKLY_REPORT_METRICS).map((k) => [k, 0]));
+  rows.forEach((r) => {
+    const m = r.metrics || {};
+    for (const [key, aliases] of Object.entries(WEEKLY_REPORT_METRICS)) {
+      sum[key] += pickWeeklyMetric(m, aliases);
+    }
+  });
+  Object.keys(sum).forEach((k) => (sum[k] = round2(sum[k])));
+  sum.commissionPercent = sum.sales ? round2(sum.commission / sum.sales) : 0;
+  sum.avgWeeklySales = rows.length ? round2(sum.sales / rows.length) : 0;
+  return sum;
+}
+
+function buildWeeklyReportSeries(rows) {
+  return rows.map((r) => {
+    const m = r.metrics || {};
+    const point = {
+      year: r.year,
+      week_number: r.week_number,
+      week_range_label: r.week_range_label,
+      week_start: r.week_start,
+      week_end: r.week_end,
+    };
+    for (const [key, aliases] of Object.entries(WEEKLY_REPORT_METRICS)) {
+      point[key] = round2(pickWeeklyMetric(m, aliases));
+    }
+    point.commissionPercent = point.sales ? round2(point.commission / point.sales) : 0;
+    return point;
+  });
+}
+
+function deltaWeeklyReport(current, compare) {
+  const keys = new Set([...Object.keys(current), ...Object.keys(compare)]);
+  const out = {};
+  keys.forEach((k) => {
+    const cur = current[k] || 0;
+    const prev = compare[k] || 0;
+    const change = round2(cur - prev);
+    const changePct = prev === 0 ? null : round2((change / Math.abs(prev)) * 100);
+    out[k] = { current: cur, compare: prev, change, changePct };
+  });
+  return out;
+}
+
+const getAnalyticsV2WeeklyReport = asyncHandler(async (req, res) => {
+  const fromDate = parseDate(req.query.from_date, 'from_date');
+  const toDate = parseDate(req.query.to_date, 'to_date');
+  const compareFrom = parseDate(req.query.compare_from, 'compare_from');
+  const compareTo = parseDate(req.query.compare_to, 'compare_to');
+  const hasCompare = Boolean(compareFrom || compareTo);
+
+  const currentRows = await fetchWeeklyTotalsForPeriod(fromDate, toDate);
+  const summary = summarizeWeeklyReport(currentRows);
+  const trend = buildWeeklyReportSeries(currentRows);
+
+  const payload = {
+    report_type: 'weekly_report',
+    period: { from: req.query.from_date || null, to: req.query.to_date || null },
+    weeks_count: currentRows.length,
+    has_data: currentRows.length > 0,
+    summary,
+    trend,
+  };
+
+  if (hasCompare) {
+    const compareRows = await fetchWeeklyTotalsForPeriod(compareFrom, compareTo);
+    const compareSummary = summarizeWeeklyReport(compareRows);
+    payload.comparison = {
+      period: { from: req.query.compare_from || null, to: req.query.compare_to || null },
+      weeks_count: compareRows.length,
+      current: summary,
+      compare: compareSummary,
+      delta: deltaWeeklyReport(summary, compareSummary),
+    };
+  }
+
+  return sendSuccess(res, 'Weekly report analytics fetched successfully', payload);
+});
+
 module.exports = {
   importExcelData,
   importHistoricalWorkbookData,
@@ -3896,4 +4013,5 @@ module.exports = {
   getAnalyticsV2ShopCompare,
   getAnalyticsV2PeriodCompare,
   getAnalyticsV2Trend,
+  getAnalyticsV2WeeklyReport,
 };
