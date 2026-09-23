@@ -136,6 +136,72 @@ describe('Rota module integration', () => {
     expectEnvelope(duplicateRes, 409);
   });
 
+  it('ROTA-OVN-1: creates an overnight shift (end before start rolls to next day)', async () => {
+    const managerLogin = await login('manager@org.com', 'Manager@1234');
+    const res = await request(app)
+      .post('/api/rotas')
+      .set('Authorization', `Bearer ${managerLogin.token}`)
+      .send({
+        user_id: fixtures.users.staffUser._id.toString(),
+        shop_id: fixtures.shops.mainShop._id.toString(),
+        shift_start: '2026-09-19T20:00:00.000Z',
+        shift_end: '2026-09-19T04:00:00.000Z', // 8pm -> 4am next day
+      });
+    expectEnvelope(res, 201);
+    const { rota } = res.body.data;
+    // end rolled to the next day, giving an 8h overnight shift
+    expect(new Date(rota.shift_end).getTime() - new Date(rota.shift_start).getTime()).toBe(
+      8 * 60 * 60 * 1000
+    );
+    expect(new Date(rota.shift_end).toISOString()).toBe('2026-09-20T04:00:00.000Z');
+  });
+
+  it('ROTA-OVN-2: creates a full 24h shift when end equals start', async () => {
+    const managerLogin = await login('manager@org.com', 'Manager@1234');
+    const res = await request(app)
+      .post('/api/rotas')
+      .set('Authorization', `Bearer ${managerLogin.token}`)
+      .send({
+        user_id: fixtures.users.staffUser._id.toString(),
+        shop_id: fixtures.shops.mainShop._id.toString(),
+        shift_start: '2026-09-21T08:00:00.000Z',
+        shift_end: '2026-09-21T08:00:00.000Z',
+      });
+    expectEnvelope(res, 201);
+    const { rota } = res.body.data;
+    expect(new Date(rota.shift_end).getTime() - new Date(rota.shift_start).getTime()).toBe(
+      24 * 60 * 60 * 1000
+    );
+  });
+
+  it('ROTA-OVN-3: still rejects an overnight shift that overlaps the user\'s existing shift', async () => {
+    const managerLogin = await login('manager@org.com', 'Manager@1234');
+    // Existing shift 22:00 -> 06:00 next day.
+    const first = await request(app)
+      .post('/api/rotas')
+      .set('Authorization', `Bearer ${managerLogin.token}`)
+      .send({
+        user_id: fixtures.users.staffUser._id.toString(),
+        shop_id: fixtures.shops.mainShop._id.toString(),
+        shift_start: '2026-09-25T22:00:00.000Z',
+        shift_end: '2026-09-25T06:00:00.000Z',
+      });
+    expectEnvelope(first, 201);
+
+    // Overlapping overnight shift 23:00 -> 03:00 next day.
+    const overlap = await request(app)
+      .post('/api/rotas')
+      .set('Authorization', `Bearer ${managerLogin.token}`)
+      .send({
+        user_id: fixtures.users.staffUser._id.toString(),
+        shop_id: fixtures.shops.mainShop._id.toString(),
+        shift_start: '2026-09-25T23:00:00.000Z',
+        shift_end: '2026-09-25T03:00:00.000Z',
+      });
+    expectEnvelope(overlap, 409);
+    expect(overlap.body.message.toLowerCase()).toContain('overlap');
+  });
+
   it('ROTA-008: rejects invalid day values in bulk rota', async () => {
     const managerLogin = await login('manager@org.com', 'Manager@1234');
 
