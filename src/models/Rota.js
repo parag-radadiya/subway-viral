@@ -81,6 +81,12 @@ rotaSchema.pre('validate', function () {
     this.end_time = toHHMM(this.shift_end);
   }
 
+  // Overnight / up-to-24h shifts: an end at or before the start rolls to the
+  // next day rather than being rejected (the end_time HH:MM is unchanged).
+  if (this.shift_start && this.shift_end && this.shift_end <= this.shift_start) {
+    this.shift_end = new Date(this.shift_end.getTime() + 24 * 60 * 60 * 1000);
+  }
+  // Still invalid after a one-day roll (end is more than 24h before start).
   if (this.shift_start && this.shift_end && this.shift_end <= this.shift_start) {
     this.invalidate('shift_end', 'Shift end must be after shift start');
   }

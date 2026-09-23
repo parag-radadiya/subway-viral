@@ -113,11 +113,13 @@ function normalizeRotaPayload(payload) {
   if (!shiftEnd || Number.isNaN(shiftEnd.getTime())) {
     throw new AppError('shift_end is required (or provide shift_date + end_time)', 400);
   }
-  const builtFromTimePattern = !payload.shift_end && payload.shift_date && payload.end_time;
-  if (builtFromTimePattern && shiftEnd <= shiftStart) {
+  // An end at or before the start is treated as the NEXT day, so overnight and
+  // up-to-24h shifts are allowed (e.g. 20:00 → 04:00, or a full 08:00 → 08:00).
+  // The only remaining blocker is an overlap with the user's own existing shift.
+  if (shiftEnd <= shiftStart) {
     shiftEnd.setUTCDate(shiftEnd.getUTCDate() + 1);
   }
-
+  // Still invalid after wrapping a day (end is more than 24h before start) → real error.
   if (shiftEnd <= shiftStart) {
     throw new AppError('shift_end must be after shift_start', 400);
   }
