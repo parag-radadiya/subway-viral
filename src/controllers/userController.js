@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const User = require('../models/User');
 const Shop = require('../models/Shop');
+const Role = require('../models/Role');
 const AppError = require('../utils/AppError');
 const asyncHandler = require('../utils/asyncHandler');
 const { sendSuccess } = require('../utils/response');
@@ -12,6 +13,12 @@ const {
   isShopAllowed,
   buildReadScope,
 } = require('../middleware/shopScopeMiddleware');
+const {
+  isOrgWideActor,
+  isProtectedRoleName,
+  assertShopsWithinActorScope,
+  assertAssignableRole,
+} = require('../utils/roleGuards');
 
 const toId = (value) => {
   if (!value) return null;
@@ -179,6 +186,13 @@ const createUser = asyncHandler(async (req, res) => {
     assigned_shop_ids,
   });
 
+  // Scoped creators (e.g. Manager with can_create_users) may only create
+  // non-Admin/Root users inside their own shops.
+  if (!isOrgWideActor(req.user)) {
+    assertAssignableRole(role_id ? await Role.findById(role_id).select('role_name') : null);
+    assertShopsWithinActorScope(req.user, shopState.assigned_shop_ids);
+  }
+
   // password_hash field triggers the pre-save bcrypt hook
   const user = await User.create({
     name,
@@ -221,15 +235,34 @@ const updateUser = asyncHandler(async (req, res) => {
     assigned_shop_ids,
   } = req.body;
 
-  const user = await User.findById(req.params.id);
+  const user = await User.findById(req.params.id).populate('role_id', 'role_name');
   if (!user) throw new AppError('User not found', 404);
 
-  const oldActiveShopId = toId(user.active_shop_id || user.shop_id);
   const nextShopState = resolveShopState({
     shop_id: shop_id !== undefined ? shop_id : user.shop_id,
     active_shop_id: active_shop_id !== undefined ? active_shop_id : user.active_shop_id,
     assigned_shop_ids: assigned_shop_ids !== undefined ? assigned_shop_ids : user.assigned_shop_ids,
   });
+
+  // Scoped editors (e.g. Manager with can_create_users) may only edit
+  // non-Admin/Root users in their shops, keep them in their shops, never
+  // assign Admin/Root, and never change their own role.
+  if (!isOrgWideActor(req.user)) {
+    if (isProtectedRoleName(user.role_id?.role_name)) {
+      throw new AppError('Forbidden: not allowed to edit this user', 403);
+    }
+    assertShopsWithinActorScope(req.user, [user.active_shop_id || user.shop_id]);
+    const roleChanging = role_id !== undefined && toId(role_id) !== toId(user.role_id);
+    if (roleChanging) {
+      if (user._id.toString() === req.user._id.toString()) {
+        throw new AppError('Forbidden: you cannot change your own role', 403);
+      }
+      assertAssignableRole(await Role.findById(role_id).select('role_name'));
+    }
+    assertShopsWithinActorScope(req.user, nextShopState.assigned_shop_ids);
+  }
+
+  const oldActiveShopId = toId(user.active_shop_id || user.shop_id);
 
   if (name !== undefined) user.name = name;
   if (email !== undefined) user.email = email;
