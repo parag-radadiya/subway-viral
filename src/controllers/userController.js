@@ -1,9 +1,11 @@
+const mongoose = require('mongoose');
 const User = require('../models/User');
 const Shop = require('../models/Shop');
 const AppError = require('../utils/AppError');
 const asyncHandler = require('../utils/asyncHandler');
 const { sendSuccess } = require('../utils/response');
 const { parsePagination, toPageMeta } = require('../utils/pagination');
+const { buildSearchFilter } = require('../utils/search');
 const notificationService = require('../services/notificationService');
 const {
   buildShopScope,
@@ -88,6 +90,22 @@ const getUsers = asyncHandler(async (req, res) => {
       }
     }
     filter.shop_id = req.query.shop_id;
+  }
+
+  const searchFilter = buildSearchFilter(req.query.search, ['name', 'email']);
+  if (searchFilter) Object.assign(filter, searchFilter);
+
+  // role_id accepts a single id or a comma-separated list.
+  if (req.query.role_id) {
+    const roleIds = uniqueIds(
+      String(req.query.role_id)
+        .split(',')
+        .map((id) => id.trim())
+    );
+    if (roleIds.some((id) => !mongoose.Types.ObjectId.isValid(id))) {
+      throw new AppError('Invalid role_id', 400);
+    }
+    if (roleIds.length > 0) filter.role_id = { $in: roleIds };
   }
 
   const [total, users] = await Promise.all([
@@ -423,9 +441,18 @@ const getUsersByShopExcludingRootAdmin = asyncHandler(async (req, res) => {
     throw new AppError('Forbidden: shop is outside your assigned scope', 403);
   }
 
+  // include_assigned=true widens the match from "active shop is this shop" to
+  // "this shop is active OR in assigned_shop_ids".
+  const includeAssigned = ['true', '1', 'yes'].includes(
+    String(req.query.include_assigned || '').toLowerCase()
+  );
+  const shopFilter = includeAssigned
+    ? { $or: [{ shop_id: shopId }, { assigned_shop_ids: shopId }] }
+    : { shop_id: shopId };
+
   const users = await User.find({
     is_active: true,
-    shop_id: shopId,
+    ...shopFilter,
   })
     .populate('role_id', 'role_name permissions')
     .populate('shop_id', 'name')
@@ -435,13 +462,20 @@ const getUsersByShopExcludingRootAdmin = asyncHandler(async (req, res) => {
 
   const totalUsersInShop = await User.countDocuments({
     is_active: true,
-    shop_id: shopId,
+    ...shopFilter,
   });
 
-  const filtered = users.filter((user) => {
-    const roleName = user.role_id?.role_name;
-    return roleName !== 'Root' && roleName !== 'Admin';
-  });
+  // shop_membership lets clients tell users whose active shop is this shop
+  // ('active') apart from users who only have it assigned ('assigned').
+  const filtered = users
+    .filter((user) => {
+      const roleName = user.role_id?.role_name;
+      return roleName !== 'Root' && roleName !== 'Admin';
+    })
+    .map((user) => ({
+      ...user.toObject(),
+      shop_membership: toId(user.shop_id) === shopId ? 'active' : 'assigned',
+    }));
 
   return sendSuccess(res, 'Shop users fetched successfully', {
     ...toPageMeta(totalUsersInShop, page, limit, filtered.length),

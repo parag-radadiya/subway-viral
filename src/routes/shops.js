@@ -27,6 +27,11 @@ const { requirePermission } = require('../middleware/permMiddleware');
  *     tags: [Shops]
  *     parameters:
  *       - in: query
+ *         name: search
+ *         description: Case-insensitive partial match on shop name.
+ *         schema:
+ *           type: string
+ *       - in: query
  *         name: page
  *         schema:
  *           type: integer

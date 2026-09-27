@@ -72,6 +72,16 @@ router.put('/me/device', protect, updateOwnDevice);
  *     tags: [Users]
  *     parameters:
  *       - in: query
+ *         name: search
+ *         description: Case-insensitive partial match on user name or email.
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: role_id
+ *         description: Filter by role. A single role id or a comma-separated list of role ids.
+ *         schema:
+ *           type: string
+ *       - in: query
  *         name: shop_id
  *         schema:
  *           type: string
@@ -132,9 +142,18 @@ router.get('/assigned-shops/staff-summary', protect, getAssignedShopsStaffSummar
  *         name: limit
  *         schema:
  *           type: integer
+ *       - in: query
+ *         name: include_assigned
+ *         description: When true, also return users who have this shop in assigned_shop_ids (not only users whose active shop is this shop).
+ *         schema:
+ *           type: boolean
+ *           default: false
  *     responses:
  *       200:
- *         description: Shop users list
+ *         description: >
+ *           Shop users list. Each user carries `shop_membership`: `active` when
+ *           this shop is the user's active shop, `assigned` when it is only in
+ *           their assigned_shop_ids (returned only with include_assigned=true).
  */
 router.get('/by-shop/:shopId/staff', protect, getUsersByShopExcludingRootAdmin);
 

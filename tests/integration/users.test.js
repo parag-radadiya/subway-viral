@@ -233,6 +233,87 @@ describe('Users module integration', () => {
     expect(roleNames).not.toContain('Admin');
   });
 
+  it('USER-016: include_assigned also returns users assigned (not active) to the shop', async () => {
+    const managerLogin = await login('manager@org.com', 'Manager@1234');
+    const eastShopId = fixtures.shops.eastShop._id;
+
+    const activeOnly = await request(app)
+      .get(`/api/users/by-shop/${eastShopId}/staff`)
+      .set('Authorization', `Bearer ${managerLogin.token}`);
+    expectEnvelope(activeOnly, 200);
+    expect(activeOnly.body.data.users).toHaveLength(0);
+
+    const withAssigned = await request(app)
+      .get(`/api/users/by-shop/${eastShopId}/staff?include_assigned=true`)
+      .set('Authorization', `Bearer ${managerLogin.token}`);
+    expectEnvelope(withAssigned, 200);
+    const emails = withAssigned.body.data.users.map((user) => user.email);
+    expect(emails).toEqual(expect.arrayContaining(['manager@org.com', 'submanager@org.com']));
+    expect(emails).not.toContain('staff@org.com');
+    expect(emails).not.toContain('root@org.com');
+    expect(emails).not.toContain('admin@org.com');
+    expect(withAssigned.body.data.users.every((u) => u.shop_membership === 'assigned')).toBe(true);
+
+    const mainShop = await request(app)
+      .get(`/api/users/by-shop/${fixtures.shops.mainShop._id}/staff?include_assigned=true`)
+      .set('Authorization', `Bearer ${managerLogin.token}`);
+    expectEnvelope(mainShop, 200);
+    expect(mainShop.body.data.users.length).toBeGreaterThan(0);
+    expect(mainShop.body.data.users.every((u) => u.shop_membership === 'active')).toBe(true);
+  });
+
+  it('USER-017: search filters users by name or email without changing the response shape', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+    const auth = { Authorization: `Bearer ${adminLogin.token}` };
+
+    const plain = await request(app).get('/api/users?page=1&limit=10').set(auth);
+    expectEnvelope(plain, 200);
+
+    const byName = await request(app).get('/api/users?page=1&limit=10&search=dave').set(auth);
+    expectEnvelope(byName, 200);
+    expect(byName.body.data.users.map((user) => user.email)).toEqual(['staff@org.com']);
+    expect(byName.body.data.total).toBe(1);
+    expect(Object.keys(byName.body.data).sort()).toEqual(Object.keys(plain.body.data).sort());
+    expect(Object.keys(byName.body.data.users[0]).sort()).toEqual(
+      Object.keys(plain.body.data.users.find((u) => u.email === 'staff@org.com')).sort()
+    );
+
+    const byEmail = await request(app).get('/api/users?search=MANAGER@ORG').set(auth);
+    expect(byEmail.body.data.users.map((user) => user.email)).toEqual(
+      expect.arrayContaining(['manager@org.com', 'submanager@org.com'])
+    );
+
+    const none = await request(app).get('/api/users?search=nobody-here').set(auth);
+    expectEnvelope(none, 200);
+    expect(none.body.data.users).toHaveLength(0);
+  });
+
+  it('USER-018: role_id filters users by one or more roles and combines with search', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+    const auth = { Authorization: `Bearer ${adminLogin.token}` };
+    const { managerRole, staffRole } = fixtures.roles;
+
+    const single = await request(app).get(`/api/users?role_id=${staffRole._id}`).set(auth);
+    expectEnvelope(single, 200);
+    expect(single.body.data.users.length).toBeGreaterThan(0);
+    expect(single.body.data.users.every((u) => u.role_id.role_name === 'Staff')).toBe(true);
+    expect(single.body.data.total).toBe(single.body.data.users.length);
+
+    const multi = await request(app)
+      .get(`/api/users?role_id=${staffRole._id},${managerRole._id}`)
+      .set(auth);
+    const multiRoles = new Set(multi.body.data.users.map((u) => u.role_id.role_name));
+    expect([...multiRoles].sort()).toEqual(['Manager', 'Staff']);
+
+    const combined = await request(app)
+      .get(`/api/users?role_id=${managerRole._id}&search=bob`)
+      .set(auth);
+    expect(combined.body.data.users.map((u) => u.email)).toEqual(['manager@org.com']);
+
+    const invalid = await request(app).get('/api/users?role_id=not-an-id').set(auth);
+    expectEnvelope(invalid, 400);
+  });
+
   it('SEC-001: rejects protected endpoint without token', async () => {
     const res = await request(app).get('/api/users');
     expectEnvelope(res, 401);
