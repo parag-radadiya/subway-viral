@@ -1495,4 +1495,48 @@ describe('Attendance module integration', () => {
       res.body.data.grand_totals.days.find((d) => d.date === '2026-03-27').total_adj
     ).toBeGreaterThanOrEqual(7.5);
   });
+
+  it('ATT-PAYROLL-BST: weekly payroll report shows punch times in UK local time (BST/GMT)', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+
+    await Attendance.insertMany([
+      {
+        // Summer (BST, UTC+1): 18:04Z -> 19:04, overnight auto punch-out 06:00Z -> 07:00.
+        user_id: fixtures.users.staffUser._id,
+        shop_id: fixtures.shops.mainShop._id,
+        punch_in: new Date('2026-08-01T18:04:24.773Z'),
+        punch_out: new Date('2026-08-02T06:00:00.000Z'),
+        punch_out_source: 'Auto',
+        punch_method: 'GPS+Biometric',
+      },
+      {
+        user_id: fixtures.users.staffUser._id,
+        shop_id: fixtures.shops.mainShop._id,
+        punch_in: new Date('2026-08-03T07:00:00.000Z'),
+        punch_out: new Date('2026-08-03T17:00:00.000Z'),
+        is_manual: true,
+        punch_method: 'Manual',
+      },
+    ]);
+
+    const res = await request(app)
+      .get('/api/attendance/weekly-payroll-report')
+      .set('Authorization', `Bearer ${adminLogin.token}`)
+      .query({
+        shop_id: fixtures.shops.mainShop._id.toString(),
+        from_date: '2026-08-01',
+        to_date: '2026-08-07',
+      });
+
+    expectEnvelope(res, 200);
+    const staffEmp = res.body.data.employees.find(
+      (e) => e.user_id === fixtures.users.staffUser._id.toString()
+    );
+    const day1 = staffEmp.days.find((d) => d.date === '2026-08-01');
+    expect(day1.punches[0].time_label).toBe('19:04-07:00^');
+    const day3 = staffEmp.days.find((d) => d.date === '2026-08-03');
+    expect(day3.punches[0].time_label).toBe('08:00-18:00*');
+    // Hours are unaffected by the display timezone.
+    expect(day3.total_adj).toBe(10);
+  });
 });

@@ -36,6 +36,28 @@ describe('Shops module integration', () => {
     expectEnvelope(getRes, 200);
   });
 
+  it('SHOP-010: search filters shops by name (case-insensitive, partial, scoped)', async () => {
+    const adminLogin = await login('admin@org.com', 'Admin@1234');
+    const staffLogin = await login('staff@org.com', 'Staff@1234');
+    const auth = (token) => ({ Authorization: `Bearer ${token}` });
+
+    const partial = await request(app).get('/api/shops?search=east').set(auth(adminLogin.token));
+    expectEnvelope(partial, 200);
+    expect(partial.body.data.shops.map((shop) => shop.name)).toEqual(['East Branch']);
+    expect(partial.body.data.total).toBe(1);
+
+    const all = await request(app).get('/api/shops?search=BRANCH').set(auth(adminLogin.token));
+    expect(all.body.data.shops).toHaveLength(2);
+
+    const special = await request(app).get('/api/shops?search=.*').set(auth(adminLogin.token));
+    expect(special.body.data.shops).toHaveLength(0);
+
+    // Staff is only assigned Main Branch, so searching East stays empty.
+    const scoped = await request(app).get('/api/shops?search=east').set(auth(staffLogin.token));
+    expectEnvelope(scoped, 200);
+    expect(scoped.body.data.shops).toHaveLength(0);
+  });
+
   it('SHOP-003 and SHOP-004: allows admin create shop and blocks staff', async () => {
     const adminLogin = await login('admin@org.com', 'Admin@1234');
     const staffLogin = await login('staff@org.com', 'Staff@1234');

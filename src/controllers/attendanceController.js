@@ -83,6 +83,22 @@ function formatReportDate(date) {
   return `${d.getUTCDate()} ${REPORT_MONTH_ABBR[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
 }
 
+// UK wall-clock "HH:MM" for an instant — Europe/London, so GMT in winter and
+// BST (UTC+1) in summer. Used for payroll report punch labels.
+const UK_TIME_FORMAT = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Europe/London',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+
+function formatUkHHMM(date) {
+  if (!date) return '';
+  const d = new Date(date);
+  if (isNaN(d.getTime())) return '';
+  return UK_TIME_FORMAT.format(d);
+}
+
 // "26 Apr 2026 14:22"
 function formatReportDateTime(date) {
   const d = new Date(date);
@@ -2677,14 +2693,6 @@ const getWeeklyPayrollReport = asyncHandler(async (req, res) => {
     .sort({ punch_in: 1 })
     .lean();
 
-  const toHHMM = (date) => {
-    if (!date) return '';
-    const d = new Date(date);
-    const h = String(d.getUTCHours()).padStart(2, '0');
-    const m = String(d.getUTCMinutes()).padStart(2, '0');
-    return `${h}:${m}`;
-  };
-
   const employeesMap = {};
 
   records.forEach((record) => {
@@ -2722,8 +2730,9 @@ const getWeeklyPayrollReport = asyncHandler(async (req, res) => {
 
     if (!dayData) return;
 
-    let inTime = toHHMM(record.punch_in);
-    let outTime = toHHMM(record.punch_out);
+    // Punch labels are shown in UK local time (GMT/BST), matching the dashboard.
+    let inTime = formatUkHHMM(record.punch_in);
+    let outTime = formatUkHHMM(record.punch_out);
     let sysFlag = record.punch_out_source === 'Auto' ? '^' : '';
     let manFlag = record.is_manual ? '*' : '';
 

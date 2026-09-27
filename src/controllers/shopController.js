@@ -3,6 +3,7 @@ const AppError = require('../utils/AppError');
 const asyncHandler = require('../utils/asyncHandler');
 const { sendSuccess } = require('../utils/response');
 const { parsePagination, toPageMeta } = require('../utils/pagination');
+const { buildSearchFilter } = require('../utils/search');
 const {
   buildShopScope,
   isShopAllowed,
@@ -45,10 +46,12 @@ const getShops = asyncHandler(async (req, res) => {
     allowedSortBy: ['createdAt', 'updatedAt', 'name'],
   });
 
+  const searchFilter = buildSearchFilter(req.query.search, ['name']) || {};
+
   if (scope.mode === 'all') {
     const [total, shops] = await Promise.all([
-      Shop.countDocuments({}),
-      Shop.find({}).sort(sort).skip(skip).limit(limit),
+      Shop.countDocuments(searchFilter),
+      Shop.find(searchFilter).sort(sort).skip(skip).limit(limit),
     ]);
     return sendSuccess(res, 'Shops fetched successfully', {
       ...toPageMeta(total, page, limit, shops.length),
@@ -64,7 +67,9 @@ const getShops = asyncHandler(async (req, res) => {
     });
   }
 
-  const filter = shopScope.all ? {} : { _id: { $in: shopScope.ids } };
+  const filter = shopScope.all
+    ? { ...searchFilter }
+    : { _id: { $in: shopScope.ids }, ...searchFilter };
   const [total, shops] = await Promise.all([
     Shop.countDocuments(filter),
     Shop.find(filter).sort(sort).skip(skip).limit(limit),
