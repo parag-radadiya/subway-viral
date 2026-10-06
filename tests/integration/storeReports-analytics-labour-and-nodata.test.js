@@ -7,6 +7,7 @@
 const request = require('supertest');
 const app = require('../../src/app');
 const StoreReportEntry = require('../../src/models/StoreReportEntry');
+const StoreReportMonthlySale2026 = require('../../src/models/StoreReportMonthlySale2026');
 const { login } = require('../helpers/auth');
 const { seedTestData } = require('../helpers/seedTestData');
 const { connectSandboxDb, clearSandboxDb, disconnectSandboxDb } = require('../setup/testDb');
@@ -124,6 +125,43 @@ describe('Analytics v2 — labour % fix + no-data flags', () => {
     expect(res.status).toBe(200);
     expect(res.body.data.total.current.labour).toBe(2150);
     expect(res.body.data.total.current.labourPercent).toBe(21.5);
+  });
+
+  it('monthly: "Labour %" does not shadow the "Labour Cost" amount', async () => {
+    // Mirrors the prod 2025 Monthly Sale rows: raw headers + camelCase copies.
+    // "Labour %" normalizes to "labour" — the first labour alias — and used to win.
+    await StoreReportMonthlySale2026.create({
+      shop_id: fixtures.shops.mainShop._id,
+      store_name_raw: 'Main Branch',
+      store_key: 'main branch',
+      source_sheet: 'Monthly Sale 2025',
+      period_key: '2025-07',
+      year: 2025,
+      month: 7,
+      metrics: {
+        'Gross Sale': 12000,
+        grossSale: 12000,
+        'Net Sale': 10000,
+        netSale: 10000,
+        Bidfood: 2500,
+        bidfood: 2500,
+        'Bidfood %': 0.25,
+        bidfoodPercent: 0.25,
+        'Labour Cost': 2400,
+        labourCost: 2400,
+        'Labour %': 0.24,
+        labourPercent: 0.24,
+      },
+    });
+    const res = await request(app)
+      .get('/api/store-reports/analytics/v2/kpi-matrix')
+      .query({ from_date: '2025-07-01', to_date: '2025-07-31', report_type: 'monthly_store_kpi' })
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.data.total.current.labour).toBe(2400); // not 0.24
+    expect(res.body.data.total.current.labourPercent).toBe(24); // not 0
+    expect(res.body.data.total.current.foodCost).toBe(2500);
+    expect(res.body.data.total.current.foodCostPercent).toBe(25);
   });
 
   it('has_data=false with a warning when the selected period has no records', async () => {
