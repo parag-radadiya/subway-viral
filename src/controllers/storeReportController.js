@@ -3199,12 +3199,49 @@ const FULL_METRIC_DEFS = {
 
 const FULL_METRIC_KEYS = Object.keys(FULL_METRIC_DEFS);
 
+// Amount metrics whose "… %" column normalizes to the same token as the amount
+// column ("Labour cost %" → "labourcost"). Some uploads (e.g. 2025 monthly KPI)
+// carry only the % column, so readMetric() would return the ratio (0.24) as the
+// amount and labour % would collapse to ~0. For those records derive the amount
+// from the % and its base instead.
+const PERCENT_ONLY_FALLBACKS = [
+  { amount: 'labour', percent: 'labourPercent', base: 'netSales' },
+  { amount: 'foodCost', percent: 'foodCostPercent', base: 'netSales' },
+  { amount: 'vat', percent: 'vatPercent', base: 'grossSales' },
+];
+
+function splitPercentKeys(metrics) {
+  const amounts = {};
+  const percents = {};
+  for (const [key, value] of Object.entries(metrics)) {
+    if (/%|percent/i.test(key)) percents[key] = value;
+    else amounts[key] = value;
+  }
+  return { amounts, percents };
+}
+
 function extractFullMetrics(record) {
   const m = record.metrics || {};
   const out = {};
   for (const [key, aliases] of Object.entries(FULL_METRIC_DEFS)) {
     out[key] = readMetric(m, aliases);
   }
+
+  const { amounts, percents } = splitPercentKeys(m);
+  for (const { amount, percent, base } of PERCENT_ONLY_FALLBACKS) {
+    if (readMetric(amounts, FULL_METRIC_DEFS[amount], null) !== null) continue;
+    const raw = readMetric(
+      percents,
+      [...FULL_METRIC_DEFS[percent], ...FULL_METRIC_DEFS[amount]],
+      null
+    );
+    if (raw === null) continue;
+    // Stored either as a ratio (0.24) or as a percentage (24).
+    const pct = Math.abs(raw) <= 1 ? raw * 100 : raw;
+    out[percent] = round2(pct);
+    out[amount] = round2(((out[base] || 0) * pct) / 100);
+  }
+
   out.instore = round2(Math.max((out.grossSales || 0) - (out.total3pd || 0), 0));
   return out;
 }
