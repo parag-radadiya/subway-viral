@@ -101,7 +101,9 @@ const userSchema = new mongoose.Schema(
 // Note: Mongoose v7+ async pre hooks — do NOT call next(), just return
 userSchema.pre('save', async function () {
   if (!this.isModified('password_hash')) return;
-  const salt = await bcrypt.genSalt(12);
+  // Cost 12 in production; tests lower it via BCRYPT_ROUNDS (each cost-12 hash
+  // takes ~220ms in bcryptjs, which dominated the test suite's runtime).
+  const salt = await bcrypt.genSalt(Number(process.env.BCRYPT_ROUNDS) || 12);
   this.password_hash = await bcrypt.hash(this.password_hash, salt);
 });
 
