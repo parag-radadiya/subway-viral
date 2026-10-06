@@ -1334,22 +1334,24 @@ function readMetric(metrics, aliases, fallback = 0) {
 
   // A percentage-labelled key like "Labour cost %" normalizes to the SAME token
   // ("labourcost") as the amount key "LABOUR COST", because "%" and spaces are
-  // stripped. Insert amount keys first so a ratio (e.g. 0.21) can never clobber
-  // the real amount (e.g. 4966.05) — which previously made labour/food/vat %
-  // metrics collapse to ~0.
-  const numericLookup = new Map();
+  // stripped — and "Labour %" normalizes to "labour", itself an amount alias.
+  // So try every alias against amount keys first and only then fall back to
+  // percent keys; otherwise a ratio (e.g. 0.24) can win over the real amount
+  // (e.g. 17260.91) and labour/food/vat % metrics collapse to ~0.
+  const amountLookup = new Map();
+  const percentLookup = new Map();
   const isPercentKey = (key) => /%|percent/i.test(key);
   for (const [key, value] of numericEntries) {
-    if (!isPercentKey(key)) numericLookup.set(normalizeMetricAlias(key), value);
-  }
-  for (const [key, value] of numericEntries) {
     const nk = normalizeMetricAlias(key);
-    if (!numericLookup.has(nk)) numericLookup.set(nk, value);
+    if (!isPercentKey(key)) amountLookup.set(nk, value);
+    else if (!percentLookup.has(nk)) percentLookup.set(nk, value);
   }
 
-  for (let i = 0; i < aliases.length; i += 1) {
-    const value = numericLookup.get(normalizeMetricAlias(aliases[i]));
-    if (typeof value === 'number') return value;
+  for (const lookup of [amountLookup, percentLookup]) {
+    for (let i = 0; i < aliases.length; i += 1) {
+      const value = lookup.get(normalizeMetricAlias(aliases[i]));
+      if (typeof value === 'number') return value;
+    }
   }
 
   return fallback;
