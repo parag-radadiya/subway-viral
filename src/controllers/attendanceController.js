@@ -19,6 +19,7 @@ const {
   isShopAllowed,
   buildReadScope,
   buildShopScope,
+  resolveAllowedShopIds,
 } = require('../middleware/shopScopeMiddleware');
 
 const PRE_SHIFT_GRACE_HOURS = 1;
@@ -918,7 +919,7 @@ function compareRotaPriority(a, b, now) {
 async function findEligibleRotas({ userId, shopId, now }) {
   return Rota.find({
     user_id: userId,
-    shop_id: shopId,
+    shop_id: Array.isArray(shopId) ? { $in: shopId } : shopId,
     shift_start: { $lte: addHours(now, PRE_SHIFT_GRACE_HOURS) },
     shift_end: { $gte: addHours(now, -AUTO_PUNCH_OUT_AFTER_SHIFT_HOURS) },
   }).sort({ shift_start: 1 });
@@ -955,6 +956,46 @@ async function resolveRotaForPunch({ userId, shopId, rotaId, now }) {
   return candidates[0];
 }
 
+// Shops a user may punch in at: their active shop, every assigned (secondary)
+// shop, plus the shop the client asked about.
+function punchShopIdsForUser(user, requestedShopId) {
+  const ids = resolveAllowedShopIds(user);
+  if (requestedShopId) ids.push(String(requestedShopId));
+  return [...new Set(ids)];
+}
+
+// Runs before validateGeofence on verify-location. The client always sends the
+// user's active shop, but the shift may be at a secondary shop — so point
+// req.body.shop_id at the shop the shift is actually at, and the geofence is
+// checked (and the location token issued) for that shop.
+const resolvePunchShop = asyncHandler(async (req, res, next) => {
+  const { shop_id, rota_id } = req.body;
+
+  if (rota_id) {
+    const rota = await Rota.findOne({ _id: rota_id, user_id: req.user._id }).select('shop_id');
+    if (!rota) {
+      throw new AppError('Selected rota was not found for this user', 404);
+    }
+    req.body.shop_id = rota.shop_id.toString();
+    return next();
+  }
+
+  const now = new Date();
+  const candidates = await findEligibleRotas({
+    userId: req.user._id,
+    shopId: punchShopIdsForUser(req.user, shop_id),
+    now,
+  });
+  const hasShiftAtRequestedShop = candidates.some(
+    (rota) => rota.shop_id.toString() === String(shop_id)
+  );
+  if (candidates.length > 0 && !hasShiftAtRequestedShop) {
+    candidates.sort((a, b) => compareRotaPriority(a, b, now));
+    req.body.shop_id = candidates[0].shop_id.toString();
+  }
+  return next();
+});
+
 async function runAutoPunchOutSweep() {
   await reconcileOverdueAutoPunchOuts({ limit: 200 });
 }
@@ -975,6 +1016,8 @@ const verifyLocation = asyncHandler(async (req, res) => {
 
   return sendSuccess(res, 'Location verified. Proceed with biometric confirmation.', {
     location_token: locationToken,
+    shop_id,
+    shop_name: req.shop?.name ?? null,
   });
 });
 
@@ -983,7 +1026,7 @@ const verifyLocation = asyncHandler(async (req, res) => {
 // POST /api/attendance/punch-in
 // ─────────────────────────────────────────────
 const punchIn = asyncHandler(async (req, res) => {
-  const { shop_id, location_token, biometric_verified, rota_id = null } = req.body;
+  const { location_token, biometric_verified, rota_id = null } = req.body;
   // Device ID verification temporarily disabled — frontend is reporting issues with device_id detection.
   // Re-enable once the client-side device ID flow is stabilised.
   // const deviceId = req.headers['x-device-id'];
@@ -1005,10 +1048,13 @@ const punchIn = asyncHandler(async (req, res) => {
     );
   }
 
-  // 3. Token must match the requesting user and shop
-  if (decoded.userId.toString() !== req.user._id.toString() || decoded.shopId !== shop_id) {
+  // 3. Token must belong to the requesting user. The shop comes from the token:
+  // verify-location may have switched it to the secondary shop where the shift
+  // is, while the client still sends its active shop_id.
+  if (decoded.userId.toString() !== req.user._id.toString()) {
     throw new AppError('Location token mismatch', 403);
   }
+  const shop_id = decoded.shopId;
 
   // 4. Device ID check — TEMPORARILY DISABLED
   // Reason: device_id verification is failing on the client side; disabled until the
@@ -2080,16 +2126,25 @@ const getShopStaffShifts = asyncHandler(async (req, res) => {
 const getEligibleRotas = asyncHandler(async (req, res) => {
   await runAutoPunchOutSweep();
   const { shop_id } = req.query;
-  if (!shop_id) {
-    throw new AppError('shop_id is required', 400);
-  }
 
+  // Search every shop the user works at, not only the one the client sent, so a
+  // shift at a secondary shop is found while the active shop is selected.
   const now = new Date();
-  const rotas = await findEligibleRotas({ userId: req.user._id, shopId: shop_id, now });
+  const rotas = await findEligibleRotas({
+    userId: req.user._id,
+    shopId: punchShopIdsForUser(req.user, shop_id),
+    now,
+  });
+
+  const shops = await Shop.find({ _id: { $in: rotas.map((r) => r.shop_id) } }).select('name');
+  const shopNames = new Map(shops.map((shop) => [shop._id.toString(), shop.name]));
 
   return sendSuccess(res, 'Eligible rotas fetched successfully', {
     count: rotas.length,
-    rotas,
+    rotas: rotas.map((rota) => ({
+      ...rota.toObject(),
+      shop: { _id: rota.shop_id, name: shopNames.get(rota.shop_id.toString()) ?? null },
+    })),
   });
 });
 
@@ -2893,6 +2948,7 @@ const getWeeklyPayrollReport = asyncHandler(async (req, res) => {
 });
 
 module.exports = {
+  resolvePunchShop,
   verifyLocation,
   punchIn,
   punchOut,
