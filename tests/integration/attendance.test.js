@@ -121,7 +121,9 @@ describe('Attendance module integration', () => {
     expectEnvelope(res, 403);
   });
 
-  it('ATT-006: blocks punch-in when location token shop/user does not match payload', async () => {
+  it('ATT-006: punches in at the shop the location token was issued for, not the payload shop', async () => {
+    // The client may send its active shop_id while verify-location issued the
+    // token for another shop; the signed token decides where the punch lands.
     const staffLogin = await login('staff@org.com', 'Staff@1234');
     const verifyRes = await request(app)
       .post('/api/attendance/verify-location')
@@ -138,6 +140,32 @@ describe('Attendance module integration', () => {
       .set('x-device-id', 'staff-device-001')
       .send({
         shop_id: fixtures.shops.eastShop._id.toString(),
+        location_token: verifyRes.body.data.location_token,
+        biometric_verified: true,
+      });
+
+    expectEnvelope(res, 201);
+    expect(res.body.data.attendance.shop_id).toBe(fixtures.shops.mainShop._id.toString());
+  });
+
+  it('ATT-006b: blocks punch-in with a location token issued to another user', async () => {
+    const managerLogin = await login('manager@org.com', 'Manager@1234');
+    const verifyRes = await request(app)
+      .post('/api/attendance/verify-location')
+      .set('Authorization', `Bearer ${managerLogin.token}`)
+      .send({
+        shop_id: fixtures.shops.mainShop._id.toString(),
+        latitude: 51.5074,
+        longitude: -0.1278,
+      });
+    expectEnvelope(verifyRes, 200);
+
+    const staffLogin = await login('staff@org.com', 'Staff@1234');
+    const res = await request(app)
+      .post('/api/attendance/punch-in')
+      .set('Authorization', `Bearer ${staffLogin.token}`)
+      .send({
+        shop_id: fixtures.shops.mainShop._id.toString(),
         location_token: verifyRes.body.data.location_token,
         biometric_verified: true,
       });

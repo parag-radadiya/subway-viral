@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const {
+  resolvePunchShop,
   verifyLocation,
   punchIn,
   punchOut,
@@ -69,7 +70,7 @@ const { validateGeofence } = require('../middleware/geoMiddleware');
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.post('/verify-location', protect, validateGeofence, verifyLocation);
+router.post('/verify-location', protect, resolvePunchShop, validateGeofence, verifyLocation);
 
 /**
  * @swagger
@@ -129,10 +130,12 @@ router.post('/punch-in', protect, punchIn);
  *     parameters:
  *       - in: query
  *         name: shop_id
- *         required: true
+ *         required: false
  *         schema:
  *           type: string
- *         description: Shop where user wants to punch in
+ *         description: |
+ *           Optional. Rotas are searched across the user's active shop, all
+ *           assigned (secondary) shops and this shop; each rota carries `shop`.
  *     responses:
  *       200:
  *         description: Eligible rota list
