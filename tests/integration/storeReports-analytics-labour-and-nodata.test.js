@@ -93,6 +93,39 @@ describe('Analytics v2 — labour % fix + no-data flags', () => {
     expect(res.body.data.total.current.labourPercent).toBe(21); // 2100/10000*100
   });
 
+  it('derives labour from "Labour cost %" when the record has no amount key', async () => {
+    // Mirrors the 2025 monthly uploads: only the ratio column, no LABOUR COST.
+    await seedWeek(fixtures.shops.mainShop, {
+      'GROSS SALES': 12000,
+      'NET SALES': 10000,
+      'Labour cost %': 0.24,
+      'Food cost %': 0.3,
+    });
+    const res = await request(app)
+      .get('/api/store-reports/analytics/v2/kpi-matrix')
+      .query({ from_date: FROM, to_date: TO, report_type: 'weekly_financial' })
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.data.total.current.labour).toBe(2400); // not 0.24
+    expect(res.body.data.total.current.labourPercent).toBe(24);
+    expect(res.body.data.total.current.foodCost).toBe(3000);
+    expect(res.body.data.total.current.foodCostPercent).toBe(30);
+  });
+
+  it('accepts a percent-only value already stored as a percentage', async () => {
+    await seedWeek(fixtures.shops.mainShop, {
+      'NET SALES': 10000,
+      'Labour cost %': 21.5,
+    });
+    const res = await request(app)
+      .get('/api/store-reports/analytics/v2/kpi-matrix')
+      .query({ from_date: FROM, to_date: TO, report_type: 'weekly_financial' })
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.data.total.current.labour).toBe(2150);
+    expect(res.body.data.total.current.labourPercent).toBe(21.5);
+  });
+
   it('has_data=false with a warning when the selected period has no records', async () => {
     const res = await request(app)
       .get('/api/store-reports/analytics/v2/trend')
