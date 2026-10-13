@@ -4,6 +4,22 @@ const { buildShopScope, isShopAllowed } = require('../middleware/shopScopeMiddle
 // Roles that only org-wide actors (Admin/Root) may create, assign, edit or delete.
 const PROTECTED_ROLE_NAMES = ['root', 'admin'];
 
+// Roles a scoped actor (e.g. Manager) can see in the roles list and assign to users.
+const SCOPED_ASSIGNABLE_ROLE_NAMES = ['staff', 'sub-manager', 'manager'];
+
+// Roles a scoped actor sees in the users list: only the roles below Manager.
+const SCOPED_LISTABLE_USER_ROLE_NAMES = ['staff', 'sub-manager'];
+
+const normalizeRoleName = (roleName) =>
+  String(roleName || '')
+    .trim()
+    .toLowerCase();
+
+// Case-insensitive exact-match query for role_name against a list of names.
+const roleNameQuery = (names) => ({
+  role_name: { $in: names.map((name) => new RegExp(`^${name}$`, 'i')) },
+});
+
 const toId = (value) => {
   if (!value) return null;
   if (typeof value === 'string') return value;
@@ -12,11 +28,10 @@ const toId = (value) => {
 };
 
 const isProtectedRoleName = (roleName) =>
-  PROTECTED_ROLE_NAMES.includes(
-    String(roleName || '')
-      .trim()
-      .toLowerCase()
-  );
+  PROTECTED_ROLE_NAMES.includes(normalizeRoleName(roleName));
+
+const isScopedAssignableRoleName = (roleName) =>
+  SCOPED_ASSIGNABLE_ROLE_NAMES.includes(normalizeRoleName(roleName));
 
 // Org-wide actors (can_manage_shops: Admin/Root) keep their existing, unrestricted
 // behaviour. Everyone else — e.g. a Manager granted can_create_users or
@@ -37,7 +52,7 @@ const assertShopsWithinActorScope = (actor, shopIds) => {
 
 const assertAssignableRole = (role) => {
   if (!role) throw new AppError('Role not found', 400);
-  if (isProtectedRoleName(role.role_name)) {
+  if (!isScopedAssignableRoleName(role.role_name)) {
     throw new AppError('Forbidden: not allowed to assign this role', 403);
   }
 };
@@ -60,7 +75,11 @@ const assertPermissionsWithinActor = (actor, permissions) => {
 };
 
 module.exports = {
+  SCOPED_ASSIGNABLE_ROLE_NAMES,
+  SCOPED_LISTABLE_USER_ROLE_NAMES,
+  roleNameQuery,
   isProtectedRoleName,
+  isScopedAssignableRoleName,
   isOrgWideActor,
   assertShopsWithinActorScope,
   assertAssignableRole,
