@@ -6,6 +6,7 @@
 const request = require('supertest');
 const app = require('../../src/app');
 const Shop = require('../../src/models/Shop');
+const User = require('../../src/models/User');
 const { expectEnvelope } = require('../helpers/assertions');
 const { login } = require('../helpers/auth');
 const { seedTestData } = require('../helpers/seedTestData');
@@ -205,6 +206,89 @@ describe('Manager permission guards', () => {
         .delete(`/api/roles/${fixtures.roles.staffRole._id}`)
         .set(auth);
       expectEnvelope(inUse, 403);
+    });
+  });
+
+  describe('lists', () => {
+    const adminAuth = async () => {
+      const adminLogin = await login('admin@org.com', 'Admin@1234');
+      return { Authorization: `Bearer ${adminLogin.token}` };
+    };
+
+    const createStaff = (overrides) =>
+      User.create({
+        name: 'Extra Staff',
+        email: `extra-${Date.now()}-${Math.random().toString(36).slice(2)}@org.com`,
+        phone_code: '+44',
+        phone_num: '7000000098',
+        password_hash: 'Extra@1234',
+        role_id: fixtures.roles.staffRole._id,
+        ...overrides,
+      });
+
+    it('MGR-030: manager roles list only has Staff, Sub-Manager and Manager', async () => {
+      const res = await request(app).get('/api/roles?limit=100').set(auth);
+      expectEnvelope(res, 200);
+      const names = res.body.data.roles.map((role) => role.role_name).sort();
+      expect(names).toEqual(['Manager', 'Staff', 'Sub-Manager']);
+      expect(res.body.data.total).toBe(3);
+    });
+
+    it('MGR-031: manager cannot fetch Admin/Root roles by id', async () => {
+      const admin = await request(app).get(`/api/roles/${fixtures.roles.adminRole._id}`).set(auth);
+      expectEnvelope(admin, 404);
+      const staff = await request(app).get(`/api/roles/${fixtures.roles.staffRole._id}`).set(auth);
+      expectEnvelope(staff, 200);
+    });
+
+    it('MGR-032: root still sees every role', async () => {
+      const rootLogin = await login('root@org.com', 'Root@1234');
+      const res = await request(app)
+        .get('/api/roles?limit=100')
+        .set({ Authorization: `Bearer ${rootLogin.token}` });
+      expectEnvelope(res, 200);
+      expect(res.body.data.roles).toHaveLength(5);
+    });
+
+    it('MGR-033: manager users list only has Staff/Sub-Managers in their shops', async () => {
+      await createStaff({
+        name: 'Assigned Only',
+        assigned_shop_ids: [fixtures.shops.eastShop._id],
+      });
+      await createStaff({ name: 'Outsider', shop_id: outsideShop._id });
+
+      const res = await request(app).get('/api/users?limit=100').set(auth);
+      expectEnvelope(res, 200);
+      const names = res.body.data.users.map((user) => user.name);
+      const roles = new Set(res.body.data.users.map((user) => user.role_id.role_name));
+
+      expect(names).toEqual(expect.arrayContaining(['Dave Staff', 'Assigned Only']));
+      expect(names).not.toContain('Outsider');
+      expect([...roles].sort()).toEqual(['Staff', 'Sub-Manager']);
+      expect(res.body.data.total).toBe(res.body.data.users.length);
+    });
+
+    it('MGR-034: manager users list ignores role_id filters for hidden roles', async () => {
+      const { managerRole, adminRole, staffRole } = fixtures.roles;
+      const hidden = await request(app)
+        .get(`/api/users?role_id=${managerRole._id},${adminRole._id}`)
+        .set(auth);
+      expectEnvelope(hidden, 200);
+      expect(hidden.body.data.users).toHaveLength(0);
+
+      const staff = await request(app).get(`/api/users?role_id=${staffRole._id}`).set(auth);
+      expectEnvelope(staff, 200);
+      expect(staff.body.data.users.every((u) => u.role_id.role_name === 'Staff')).toBe(true);
+      expect(staff.body.data.users.length).toBeGreaterThan(0);
+    });
+
+    it('MGR-035: admin users list is unchanged', async () => {
+      const res = await request(app)
+        .get('/api/users?limit=100')
+        .set(await adminAuth());
+      expectEnvelope(res, 200);
+      const roles = res.body.data.users.map((user) => user.role_id.role_name);
+      expect(roles).toEqual(expect.arrayContaining(['Root', 'Admin', 'Manager']));
     });
   });
 

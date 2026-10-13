@@ -290,24 +290,37 @@ breaks one:
 
 - The new user's active and assigned shops must all be shops the Manager is
   assigned to. At least one shop is required.
-- The role can't be **Admin** or **Root**. Staff, Sub-Manager, Manager and
-  custom roles are allowed.
+- The role must be **Staff**, **Sub-Manager** or **Manager**. Admin, Root and
+  custom roles are rejected.
 - They can't edit Admin or Root users, or users outside their shops.
 - They can't move a user to a shop outside their own.
 - They can't change their **own** role.
-- In the role dropdown, hide Admin/Root and limit the shop pickers to the
+- `GET /api/roles` already returns only Staff, Sub-Manager and Manager for a
+  Manager, so the role dropdown can use it as-is. Limit the shop pickers to the
   Manager's assigned shops.
 
 ³ **Adjust attendance hours**: only for shops the Manager is assigned to.
 
 ⁴ **Roles management** (`/api/roles`)
 
-- They can list and view all roles.
+- `GET /api/roles` returns only **Staff**, **Sub-Manager** and **Manager**
+  (`total` is counted the same way). `GET /api/roles/:id` returns `404` for any
+  other role.
 - They can't edit or delete **Admin**, **Root**, or their **own** role.
 - They can't create or rename a role to `Admin` / `Root`.
 - They can only turn on permissions they hold themselves. For example, a
   Manager can't grant `can_manage_shops`.
 - They can't delete a role that's still assigned to active users.
+
+⁵ **Users list** (`GET /api/users`, used by `/manager/users`)
+
+- A Manager (and Sub-Manager) only gets the users under them: **Staff** and
+  **Sub-Managers** whose active shop _or_ assigned shops include one of the
+  Manager's shops.
+- Admin, Root, other Managers and the Manager themself are not returned.
+- `role_id` filters for hidden roles return an empty list; `search`, `shop_id`
+  and pagination work as before within this set.
+- Admin and Root still see every user.
 
 > Rollout: `can_adjust_attendance_hours` is already live on stage and prod. The
 > user and role permissions will be switched on once the backend guards are
