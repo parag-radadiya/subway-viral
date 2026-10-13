@@ -14,6 +14,8 @@ const {
   buildReadScope,
 } = require('../middleware/shopScopeMiddleware');
 const {
+  SCOPED_LISTABLE_USER_ROLE_NAMES,
+  roleNameQuery,
   isOrgWideActor,
   isProtectedRoleName,
   assertShopsWithinActorScope,
@@ -76,6 +78,22 @@ const getUsers = asyncHandler(async (req, res) => {
   });
   applyUserReadScopeFilter(filter, req, scope);
 
+  // Scoped actors (e.g. Manager) only see the users under them: Staff and
+  // Sub-Managers whose active or assigned shops include one of their shops.
+  let listableRoleIds = null;
+  if (scope.mode === 'shops' && !isOrgWideActor(req.user)) {
+    const shopIds = scope.shopScope.ids;
+    delete filter.shop_id;
+    filter.$and = [
+      { $or: [{ shop_id: { $in: shopIds } }, { assigned_shop_ids: { $in: shopIds } }] },
+    ];
+    const listableRoles = await Role.find(roleNameQuery(SCOPED_LISTABLE_USER_ROLE_NAMES)).select(
+      '_id'
+    );
+    listableRoleIds = listableRoles.map((role) => role._id.toString());
+    filter.role_id = { $in: listableRoleIds };
+  }
+
   if (req.query.shop_id) {
     if (
       scope.mode === 'shops' &&
@@ -112,7 +130,11 @@ const getUsers = asyncHandler(async (req, res) => {
     if (roleIds.some((id) => !mongoose.Types.ObjectId.isValid(id))) {
       throw new AppError('Invalid role_id', 400);
     }
-    if (roleIds.length > 0) filter.role_id = { $in: roleIds };
+    if (roleIds.length > 0) {
+      filter.role_id = {
+        $in: listableRoleIds ? roleIds.filter((id) => listableRoleIds.includes(id)) : roleIds,
+      };
+    }
   }
 
   const [total, users] = await Promise.all([
