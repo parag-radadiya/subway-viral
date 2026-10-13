@@ -5,7 +5,7 @@ const { buildShopScope, isShopAllowed } = require('../middleware/shopScopeMiddle
 
 function buildInventoryScope(user) {
   const permissions = user?.role_id?.permissions || {};
-  if (permissions.can_manage_shops || permissions.can_manage_roles) {
+  if (permissions.can_manage_shops) {
     return { all: true, ids: [] };
   }
   return buildShopScope(user);

@@ -249,13 +249,14 @@ admin can change them. Always use `user.role_id.permissions` from
 | `can_manage_inventory`        |   ✅    |     ✅      |
 | `can_correct_attendance`      |   ✅    |     ✅      |
 | `can_delete_staff`            |   ✅    |     ✅      |
-| `can_create_users`            |   ❌    |     ❌      |
-| `can_adjust_attendance_hours` |   ❌    |     ❌      |
+| `can_create_users`            | ✅ new  |     ❌      |
+| `can_adjust_attendance_hours` | ✅ new  |     ❌      |
 | `can_manage_shops`            |   ❌    |     ❌      |
-| `can_manage_roles`            |   ❌    |     ❌      |
+| `can_manage_roles`            | ✅ new  |     ❌      |
 
 Both roles only see data for their **assigned shops**. Only roles with
-`can_manage_shops` or `can_manage_roles` (Admin, Root) see all shops.
+`can_manage_shops` (Admin, Root) see all shops. `can_manage_roles` no longer
+widens shop access.
 
 | Feature                                                        | Manager | Sub-Manager |
 | -------------------------------------------------------------- | :-----: | :---------: |
@@ -268,11 +269,60 @@ Both roles only see data for their **assigned shops**. Only roles with
 | Reconcile overdue punches for others                           |   ✅    |     ❌      |
 | Trigger notification scan (`POST /api/notifications/scan`)     |   ✅    |     ❌      |
 | Create, edit or delete rotas (incl. bulk)                      |   ✅    |     ❌      |
-| Create or edit users                                           |   ❌    |     ❌      |
-| Adjust attendance hours (`/api/attendance/adjust-hours/*`)     |   ❌    |     ❌      |
+| Create or edit users²                                          | ✅ new  |     ❌      |
+| Adjust attendance hours (`/api/attendance/adjust-hours/*`)³    | ✅ new  |     ❌      |
 | Create or edit shops, shop hours                               |   ❌    |     ❌      |
 | Rota dashboard, store reports and analytics (Root/Admin only)  |   ❌    |     ❌      |
-| Roles management, observability                                |   ❌    |     ❌      |
+| Roles management (`/api/roles`)⁴                               | ✅ new  |     ❌      |
+| Observability                                                  |   ❌    |     ❌      |
 
 ¹ Only users in their assigned shops. They cannot deactivate Admin, Manager or
 Root accounts, or themselves.
+
+### New Manager permissions and their limits
+
+A Manager now has `can_create_users`, `can_adjust_attendance_hours` and
+`can_manage_roles`. Admin and Root behave exactly as before. For a Manager the
+API enforces these limits and returns **`403`** with a message when a request
+breaks one:
+
+² **Create / edit users** (`POST /api/users`, `PUT /api/users/:id`)
+
+- The new user's active and assigned shops must all be shops the Manager is
+  assigned to. At least one shop is required.
+- The role must be **Staff**, **Sub-Manager** or **Manager**. Admin, Root and
+  custom roles are rejected.
+- They can't edit Admin or Root users, or users outside their shops.
+- They can't move a user to a shop outside their own.
+- They can't change their **own** role.
+- `GET /api/roles` already returns only Staff, Sub-Manager and Manager for a
+  Manager, so the role dropdown can use it as-is. Limit the shop pickers to the
+  Manager's assigned shops.
+
+³ **Adjust attendance hours**: only for shops the Manager is assigned to.
+
+⁴ **Roles management** (`/api/roles`)
+
+- `GET /api/roles` returns only **Staff**, **Sub-Manager** and **Manager**
+  (`total` is counted the same way). `GET /api/roles/:id` returns `404` for any
+  other role.
+- They can't edit or delete **Admin**, **Root**, or their **own** role.
+- They can't create or rename a role to `Admin` / `Root`.
+- They can only turn on permissions they hold themselves. For example, a
+  Manager can't grant `can_manage_shops`.
+- They can't delete a role that's still assigned to active users.
+
+⁵ **Users list** (`GET /api/users`, used by `/manager/users`)
+
+- A Manager (and Sub-Manager) only gets the users under them: **Staff** and
+  **Sub-Managers** whose active shop _or_ assigned shops include one of the
+  Manager's shops.
+- Admin, Root, other Managers and the Manager themself are not returned.
+- `role_id` filters for hidden roles return an empty list; `search`, `shop_id`
+  and pagination work as before within this set.
+- Admin and Root still see every user.
+
+> Rollout: `can_adjust_attendance_hours` is already live on stage and prod. The
+> user and role permissions will be switched on once the backend guards are
+> deployed. Until then, Managers get `403` on `/api/roles` and when
+> creating/editing users.
