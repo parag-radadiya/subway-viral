@@ -5,8 +5,11 @@ const asyncHandler = require('../utils/asyncHandler');
 const { sendSuccess } = require('../utils/response');
 const { parsePagination, toPageMeta } = require('../utils/pagination');
 const {
+  SCOPED_ASSIGNABLE_ROLE_NAMES,
+  roleNameQuery,
   isOrgWideActor,
   isProtectedRoleName,
+  isScopedAssignableRoleName,
   assertPermissionsWithinActor,
 } = require('../utils/roleGuards');
 
@@ -37,9 +40,13 @@ const getRoles = asyncHandler(async (req, res) => {
     allowedSortBy: ['createdAt', 'updatedAt', 'role_name'],
   });
 
+  // Scoped actors (e.g. Manager) only see the roles they can assign:
+  // Staff, Sub-Manager and Manager.
+  const filter = isOrgWideActor(req.user) ? {} : roleNameQuery(SCOPED_ASSIGNABLE_ROLE_NAMES);
+
   const [total, roles] = await Promise.all([
-    Role.countDocuments({}),
-    Role.find({}).sort(sort).skip(skip).limit(limit),
+    Role.countDocuments(filter),
+    Role.find(filter).sort(sort).skip(skip).limit(limit),
   ]);
 
   return sendSuccess(res, 'Roles fetched successfully', {
@@ -51,7 +58,9 @@ const getRoles = asyncHandler(async (req, res) => {
 // GET /api/roles/:id
 const getRole = asyncHandler(async (req, res) => {
   const role = await Role.findById(req.params.id);
-  if (!role) throw new AppError('Role not found', 404);
+  if (!role || (!isOrgWideActor(req.user) && !isScopedAssignableRoleName(role.role_name))) {
+    throw new AppError('Role not found', 404);
+  }
   return sendSuccess(res, 'Role fetched successfully', { role });
 });
 
