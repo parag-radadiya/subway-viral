@@ -183,7 +183,7 @@ const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 function buildRotaReadScope(user) {
   const permissions = user?.role_id?.permissions || {};
-  if (permissions.can_manage_shops || permissions.can_manage_roles) {
+  if (permissions.can_manage_shops) {
     return { mode: 'all', shopScope: { all: true, ids: [] } };
   }
 
@@ -224,7 +224,7 @@ function applyScopeFilter(filter, req, scope) {
 
 function buildRotaManageScope(user) {
   const permissions = user?.role_id?.permissions || {};
-  if (permissions.can_manage_shops || permissions.can_manage_roles) {
+  if (permissions.can_manage_shops) {
     return { mode: 'all', shopScope: { all: true, ids: [] } };
   }
   if (permissions.can_manage_rotas) {
