@@ -17,7 +17,7 @@ const resolveAllowedShopIds = (user) => {
 
 const canAccessAllShops = (user) => {
   const permissions = user?.role_id?.permissions || {};
-  return Boolean(permissions.can_manage_shops || permissions.can_manage_roles);
+  return Boolean(permissions.can_manage_shops);
 };
 
 const buildShopScope = (user) => ({
@@ -34,7 +34,7 @@ const isShopAllowed = (shopScope, shopId) => {
 
 const buildReadScope = (user) => {
   const permissions = user?.role_id?.permissions || {};
-  if (permissions.can_manage_shops || permissions.can_manage_roles) {
+  if (permissions.can_manage_shops) {
     return { mode: 'all', shopScope: { all: true, ids: [] } };
   }
   if (
