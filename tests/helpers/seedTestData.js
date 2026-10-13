@@ -39,14 +39,14 @@ const seedTestData = async () => {
     {
       role_name: 'Manager',
       permissions: {
-        can_create_users: false,
+        can_create_users: true,
         can_view_all_staff: true,
         can_manage_rotas: true,
         can_manual_punch: true,
         can_manage_inventory: true,
         can_manage_shops: false,
-        can_manage_roles: false,
-        can_adjust_attendance_hours: false,
+        can_manage_roles: true,
+        can_adjust_attendance_hours: true,
         can_correct_attendance: true,
         can_delete_staff: true,
       },
